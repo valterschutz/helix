@@ -308,14 +308,14 @@ impl MappableCommand {
         move_char_right, "Move right",
         move_line_up, "Move up",
         move_line_down, "Move down",
-        move_visual_line_up, "Move up",
-        move_visual_line_down, "Move down",
+        move_visual_line_up, "Move up visual line; with a count, document lines",
+        move_visual_line_down, "Move down visual line; with a count, document lines",
         extend_char_left, "Extend left",
         extend_char_right, "Extend right",
         extend_line_up, "Extend up",
         extend_line_down, "Extend down",
-        extend_visual_line_up, "Extend up",
-        extend_visual_line_down, "Extend down",
+        extend_visual_line_up, "Extend up visual line; with a count, document lines",
+        extend_visual_line_down, "Extend down visual line; with a count, document lines",
         copy_selection_on_next_line, "Copy selection on next line",
         copy_selection_on_prev_line, "Copy selection on previous line",
         move_next_word_start, "Move to start of next word",
@@ -384,8 +384,8 @@ impl MappableCommand {
         make_search_word_bounded, "Modify current search to make it word bounded",
         global_search, "Global search in workspace folder",
         extend_line, "Select current line, if already selected, extend to another line based on the anchor",
-        extend_line_below, "Select current line, if already selected, extend to next line",
-        extend_line_above, "Select current line, if already selected, extend to previous line",
+        extend_line_below, "Select current line, if already selected, extend to next line; with a count, extend to the nth line below the cursor",
+        extend_line_above, "Select current line, if already selected, extend to previous line; with a count, extend to the nth line above the cursor",
         select_line_above, "Select current line, if already selected, extend or shrink line above based on the anchor",
         select_line_below, "Select current line, if already selected, extend or shrink line below based on the anchor",
         extend_to_line_bounds, "Extend selection to line bounds",
@@ -765,22 +765,28 @@ fn move_line_down(cx: &mut Context) {
     move_impl(cx, move_vertically, Direction::Forward, Movement::Move)
 }
 
+/// Vertical movement without a count follows visual (soft-wrapped) lines so a
+/// long line can be navigated. With a count it follows document lines instead,
+/// so `5j` lands on the line the relative line numbers label `5`, as in vim.
+fn vertical_move_fn(cx: &Context) -> MoveFn {
+    if cx.count.is_some() {
+        move_vertically
+    } else {
+        move_vertically_visual
+    }
+}
+
 fn move_visual_line_up(cx: &mut Context) {
     move_impl(
         cx,
-        move_vertically_visual,
+        vertical_move_fn(cx),
         Direction::Backward,
         Movement::Move,
     )
 }
 
 fn move_visual_line_down(cx: &mut Context) {
-    move_impl(
-        cx,
-        move_vertically_visual,
-        Direction::Forward,
-        Movement::Move,
-    )
+    move_impl(cx, vertical_move_fn(cx), Direction::Forward, Movement::Move)
 }
 
 fn extend_char_left(cx: &mut Context) {
@@ -802,7 +808,7 @@ fn extend_line_down(cx: &mut Context) {
 fn extend_visual_line_up(cx: &mut Context) {
     move_impl(
         cx,
-        move_vertically_visual,
+        vertical_move_fn(cx),
         Direction::Backward,
         Movement::Extend,
     )
@@ -811,7 +817,7 @@ fn extend_visual_line_up(cx: &mut Context) {
 fn extend_visual_line_down(cx: &mut Context) {
     move_impl(
         cx,
-        move_vertically_visual,
+        vertical_move_fn(cx),
         Direction::Forward,
         Movement::Extend,
     )
@@ -2810,36 +2816,54 @@ fn extend_line_below(cx: &mut Context) {
 fn extend_line_above(cx: &mut Context) {
     extend_line_impl(cx, Extend::Above);
 }
+/// Without a count: select the current line(s), or if they are already fully
+/// selected, extend by one more line. With a count `n`: extend the selection
+/// from its anchor's line to the line `n` lines away from the cursor, i.e. the
+/// line the relative line numbers label `n`. Selecting the current line is not
+/// counted as a step, so `1x` covers one line more than `x` does.
 fn extend_line_impl(cx: &mut Context, extend: Extend) {
-    let count = cx.count();
+    let count = cx.count;
     let (view, doc) = current!(cx.editor);
 
     let text = doc.text();
+    let last_line = text.len_lines() - 1;
+    let line_start = |line: usize| text.line_to_char(line.min(text.len_lines()));
+
     let selection = doc.selection(view.id).clone().transform(|range| {
         let (start_line, end_line) = range.line_range(text.slice(..));
+        let whole_lines =
+            range.from() == line_start(start_line) && range.to() == line_start(end_line + 1);
 
-        let start = text.line_to_char(start_line);
-        let end = text.line_to_char(
-            (end_line + 1) // newline of end_line
-                .min(text.len_lines()),
-        );
-
-        // extend to previous/next line if current line is selected
-        let (anchor, head) = if range.from() == start && range.to() == end {
-            match extend {
-                Extend::Above => (end, text.line_to_char(start_line.saturating_sub(count))),
-                Extend::Below => (
-                    start,
-                    text.line_to_char((end_line + count + 1).min(text.len_lines())),
+        let (anchor_line, head_line) = match count {
+            None => match extend {
+                Extend::Below => (start_line, end_line + usize::from(whole_lines)),
+                Extend::Above => (
+                    end_line,
+                    start_line.saturating_sub(usize::from(whole_lines)),
                 ),
+            },
+            Some(count) => {
+                let cursor_line = range.cursor_line(text.slice(..));
+                let anchor_line = match range.direction() {
+                    Direction::Forward => start_line,
+                    Direction::Backward => end_line,
+                };
+                let head_line = match extend {
+                    Extend::Below => cursor_line + count.get(),
+                    Extend::Above => cursor_line.saturating_sub(count.get()),
+                };
+                (anchor_line, head_line)
             }
-        } else {
-            match extend {
-                Extend::Above => (end, text.line_to_char(start_line.saturating_sub(count - 1))),
-                Extend::Below => (
-                    start,
-                    text.line_to_char((end_line + count).min(text.len_lines())),
-                ),
+        };
+        let head_line = head_line.min(last_line);
+        assert!(anchor_line <= last_line);
+
+        let (anchor, head) = match (anchor_line.cmp(&head_line), &extend) {
+            (Ordering::Less, _) | (Ordering::Equal, Extend::Below) => {
+                (line_start(anchor_line), line_start(head_line + 1))
+            }
+            (Ordering::Greater, _) | (Ordering::Equal, Extend::Above) => {
+                (line_start(anchor_line + 1), line_start(head_line))
             }
         };
 

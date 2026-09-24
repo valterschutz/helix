@@ -97,7 +97,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
 
         "%" => select_all,
         "x" => extend_line_below,
-        "X" => extend_to_line_bounds,
+        "X" => extend_line_above,
         "A-x" => shrink_to_line_bounds,
 
         "m" => { "Match"

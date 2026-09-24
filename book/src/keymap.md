@@ -40,8 +40,8 @@ Normal mode is the default mode when you launch helix. You can return to it from
 | Key                   | Description                                        | Command                     |
 | -----                 | -----------                                        | -------                     |
 | `h`, `Left`           | Move left                                          | `move_char_left`            |
-| `j`, `Down`           | Move down                                          | `move_visual_line_down`     |
-| `k`, `Up`             | Move up                                            | `move_visual_line_up`       |
+| `j`, `Down`           | Move down (visual line; with a count, document lines) | `move_visual_line_down`     |
+| `k`, `Up`             | Move up (visual line; with a count, document lines)   | `move_visual_line_up`       |
 | `l`, `Right`          | Move right                                         | `move_char_right`           |
 | `w`                   | Move next word start                               | `move_next_word_start`      |
 | `b`                   | Move previous word start                           | `move_prev_word_start`      |
@@ -136,8 +136,8 @@ Normal mode is the default mode when you launch helix. You can return to it from
 | `Alt-(`                  | Rotate selection contents backward                                | `rotate_selection_contents_backward` |
 | `Alt-)`                  | Rotate selection contents forward                                 | `rotate_selection_contents_forward`  |
 | `%`                      | Select entire file                                                | `select_all`                         |
-| `x`                      | Select current line, if already selected, extend to next line     | `extend_line_below`                  |
-| `X`                      | Extend selection to line bounds (line-wise selection)             | `extend_to_line_bounds`              |
+| `x`                      | Select current line, if already selected, extend to next line; `Nx` extends to the line `N` below the cursor | `extend_line_below`                  |
+| `X`                      | Select current line, if already selected, extend to previous line; `NX` extends to the line `N` above the cursor | `extend_line_above`                  |
 | `Alt-x`                  | Shrink selection to line bounds (line-wise selection)             | `shrink_to_line_bounds`              |
 | `J`                      | Join lines inside selection                                       | `join_selections`                    |
 | `Alt-J`                  | Join lines inside selection and select the inserted space         | `join_selections_space`              |
