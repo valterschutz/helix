@@ -1,3 +1,20 @@
+# Fork changes (valterschutz/helix)
+
+Permanent fork; these changes are not meant for upstream. Upstream's work is
+brought in by merging `upstream/master`. Upstream's own changelog follows below.
+
+## 2026-09-24
+
+- Counted vertical movement follows document lines: `j`/`k` (and `Down`/`Up`,
+  in normal and select mode) still move by visual line when soft wrap is on,
+  but `5j` moves five document lines, so it lands on the line the relative
+  line numbers label `5`, as in vim.
+- `x`/`X` counts are relative to the cursor line: `Nx` extends the selection
+  to the line `N` below the cursor (`NX`: above), matching the relative line
+  numbers. Selecting the current line is no longer counted as a step, so `1x`
+  selects one line more than `x`. `X` is now `extend_line_above` instead of
+  `extend_to_line_bounds` (which remains available as a command).
+
 <!--
 # YY.0M (YYYY-0M-0D)
 

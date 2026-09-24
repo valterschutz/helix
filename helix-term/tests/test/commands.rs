@@ -340,18 +340,125 @@ async fn test_extend_line() -> anyhow::Result<()> {
     ))
     .await?;
 
-    // extend with count on partial selection
+    // without a count, only the current line is selected
     test((
         indoc! {"\
             #[l|]#orem
             ipsum
-            
+
+            "},
+        "x",
+        indoc! {"\
+            #[lorem\n|]#
+            ipsum
+
+            "},
+    ))
+    .await?;
+
+    // with a count, the selection reaches the nth line below the cursor, so
+    // `1x` selects one line more than `x`
+    test((
+        indoc! {"\
+            #[l|]#orem
+            ipsum
+
+            "},
+        "1x",
+        indoc! {"\
+            #[lorem
+            ipsum\n|]#
+
+            "},
+    ))
+    .await?;
+
+    // the count is relative to the cursor line, not to the selection size
+    test((
+        indoc! {"\
+            #[l|]#orem
+            ipsum
+            dolor
+            sit
+
             "},
         "2x",
         indoc! {"\
             #[lorem
-            ipsum\n|]#
-            
+            ipsum
+            dolor\n|]#
+            sit
+
+            "},
+    ))
+    .await?;
+
+    // the count is clamped to the end of the document
+    test((
+        indoc! {"\
+            #[l|]#orem
+            ipsum
+
+            "},
+        "9x",
+        indoc! {"\
+            #[lorem
+            ipsum
+            \n|]#"},
+    ))
+    .await?;
+
+    // `X` selects the current line backwards; with a count, up to the nth line
+    // above the cursor
+    test((
+        indoc! {"\
+            lorem
+            ipsum
+            #[d|]#olor
+
+            "},
+        "X",
+        indoc! {"\
+            lorem
+            ipsum
+            #[|dolor\n]#
+
+            "},
+    ))
+    .await?;
+    test((
+        indoc! {"\
+            lorem
+            ipsum
+            #[d|]#olor
+
+            "},
+        "2X",
+        indoc! {"\
+            #[|lorem
+            ipsum
+            dolor\n]#
+
+            "},
+    ))
+    .await?;
+
+    // extending past the anchor keeps the anchor's line and flips direction
+    test((
+        indoc! {"\
+            lorem
+            ipsum
+            #[d|]#olor
+            sit
+
+            "},
+        "1X2x",
+        indoc! {"\
+            lorem
+            ipsum
+            #[dolor
+            sit\n|]#
+
             "},
     ))
     .await?;

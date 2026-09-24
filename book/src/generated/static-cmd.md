@@ -5,14 +5,14 @@
 | `move_char_right` | Move right | normal: `` l ``, `` <right> ``, insert: `` <right> `` |
 | `move_line_up` | Move up | normal: `` gk `` |
 | `move_line_down` | Move down | normal: `` gj `` |
-| `move_visual_line_up` | Move up | normal: `` k ``, `` <up> ``, insert: `` <up> `` |
-| `move_visual_line_down` | Move down | normal: `` j ``, `` <down> ``, insert: `` <down> `` |
+| `move_visual_line_up` | Move up visual line; with a count, document lines | normal: `` k ``, `` <up> ``, insert: `` <up> `` |
+| `move_visual_line_down` | Move down visual line; with a count, document lines | normal: `` j ``, `` <down> ``, insert: `` <down> `` |
 | `extend_char_left` | Extend left | select: `` h ``, `` <left> `` |
 | `extend_char_right` | Extend right | select: `` l ``, `` <right> `` |
 | `extend_line_up` | Extend up | select: `` gk `` |
 | `extend_line_down` | Extend down | select: `` gj `` |
-| `extend_visual_line_up` | Extend up | select: `` k ``, `` <up> `` |
-| `extend_visual_line_down` | Extend down | select: `` j ``, `` <down> `` |
+| `extend_visual_line_up` | Extend up visual line; with a count, document lines | select: `` k ``, `` <up> `` |
+| `extend_visual_line_down` | Extend down visual line; with a count, document lines | select: `` j ``, `` <down> `` |
 | `copy_selection_on_next_line` | Copy selection on next line | normal: `` C ``, select: `` C `` |
 | `copy_selection_on_prev_line` | Copy selection on previous line | normal: `` <A-C> ``, select: `` <A-C> `` |
 | `move_next_word_start` | Move to start of next word | normal: `` w `` |
@@ -81,11 +81,11 @@
 | `make_search_word_bounded` | Modify current search to make it word bounded |  |
 | `global_search` | Global search in workspace folder | normal: `` <space>/ ``, select: `` <space>/ `` |
 | `extend_line` | Select current line, if already selected, extend to another line based on the anchor |  |
-| `extend_line_below` | Select current line, if already selected, extend to next line | normal: `` x ``, select: `` x `` |
-| `extend_line_above` | Select current line, if already selected, extend to previous line |  |
+| `extend_line_below` | Select current line, if already selected, extend to next line; with a count, extend to the nth line below the cursor | normal: `` x ``, select: `` x `` |
+| `extend_line_above` | Select current line, if already selected, extend to previous line; with a count, extend to the nth line above the cursor | normal: `` X ``, select: `` X `` |
 | `select_line_above` | Select current line, if already selected, extend or shrink line above based on the anchor |  |
 | `select_line_below` | Select current line, if already selected, extend or shrink line below based on the anchor |  |
-| `extend_to_line_bounds` | Extend selection to line bounds | normal: `` X ``, select: `` X `` |
+| `extend_to_line_bounds` | Extend selection to line bounds |  |
 | `shrink_to_line_bounds` | Shrink selection to line bounds | normal: `` <A-x> ``, select: `` <A-x> `` |
 | `delete_selection` | Delete selection | normal: `` d ``, select: `` d `` |
 | `delete_selection_noyank` | Delete selection without yanking | normal: `` <A-d> ``, select: `` <A-d> `` |
