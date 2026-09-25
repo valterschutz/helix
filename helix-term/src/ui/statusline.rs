@@ -158,7 +158,23 @@ where
         helix_view::editor::StatusLineElement::Register => render_register,
         helix_view::editor::StatusLineElement::CurrentWorkingDirectory => render_cwd,
         helix_view::editor::StatusLineElement::CodeActionHint => render_code_action_hint,
+        helix_view::editor::StatusLineElement::WindowZoom => render_window_zoom,
     }
+}
+
+fn render_window_zoom<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    if let Some(indicator) = window_zoom_indicator(context.editor.tree.is_zoomed(), context.focused)
+    {
+        let style = context.editor.theme.get("ui.statusline.normal");
+        write(context, Span::styled(indicator, style));
+    }
+}
+
+fn window_zoom_indicator(is_zoomed: bool, is_focused: bool) -> Option<&'static str> {
+    (is_zoomed && is_focused).then_some(" ZOOM ")
 }
 
 fn render_mode<'a, F>(context: &mut RenderContext<'a>, write: F)
@@ -591,5 +607,17 @@ where
 {
     if context.focused && context.doc.code_action_hints(context.view.id) {
         write(context, " ⋮ ".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_zoom_indicator;
+
+    #[test]
+    fn window_zoom_indicator_only_appears_in_focused_zoomed_view() {
+        assert_eq!(Some(" ZOOM "), window_zoom_indicator(true, true));
+        assert_eq!(None, window_zoom_indicator(false, true));
+        assert_eq!(None, window_zoom_indicator(true, false));
     }
 }
