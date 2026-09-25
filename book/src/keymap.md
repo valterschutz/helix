@@ -278,6 +278,7 @@ This layer is similar to Vim keybindings as Kakoune does not support windows.
 | `l`, `Ctrl-l`, `Right` | Move to right split                                  | `jump_view_right` |
 | `q`, `Ctrl-q`          | Close current window                                 | `wclose`          |
 | `o`, `Ctrl-o`          | Only keep the current window, closing all the others | `wonly`           |
+| `e`                    | Toggle zoom for the current window                   | `wzoom`           |
 | `H`                    | Swap window to the left                              | `swap_view_left`  |
 | `J`                    | Swap window downwards                                | `swap_view_down`  |
 | `K`                    | Swap window upwards                                  | `swap_view_up`    |

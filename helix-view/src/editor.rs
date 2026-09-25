@@ -2293,6 +2293,10 @@ impl Editor {
         }
 
         let prev_id = std::mem::replace(&mut self.tree.focus, view_id);
+        if self.tree.is_zoomed() {
+            self.tree.recalculate();
+            self.ensure_cursor_in_view(view_id);
+        }
         doc_mut!(self).mark_as_focused();
 
         let focus_lost = self.tree.get(prev_id).doc;
@@ -2319,6 +2323,14 @@ impl Editor {
 
     pub fn swap_split_in_direction(&mut self, direction: tree::Direction) {
         self.tree.swap_split_in_direction(direction);
+        if self.tree.is_zoomed() {
+            self.tree.recalculate();
+        }
+    }
+
+    pub fn toggle_view_zoom(&mut self) {
+        self.tree.toggle_zoom();
+        self.ensure_cursor_in_view(self.tree.focus);
     }
 
     pub fn transpose_view(&mut self) {
