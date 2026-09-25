@@ -8,6 +8,8 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 - `Ctrl-w e` (and `Space w e`) toggles zoom for the current window without
   closing the other splits. Window navigation and layout restoration continue
   to work while zoomed.
+- The configurable `window-zoom` statusline element displays `ZOOM` while the
+  current window is zoomed.
 
 ## 2026-09-24
 

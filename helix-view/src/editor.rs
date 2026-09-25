@@ -804,6 +804,21 @@ pub enum StatusLineElement {
 
     /// Indicator for when code actions are available
     CodeActionHint,
+
+    /// Indicator for when the current window is zoomed
+    WindowZoom,
+}
+
+#[cfg(test)]
+mod status_line_tests {
+    use super::{StatusLineConfig, StatusLineElement};
+
+    #[test]
+    fn window_zoom_element_deserializes() {
+        let config = toml::from_str::<StatusLineConfig>(r#"left = ["window-zoom"]"#).unwrap();
+
+        assert_eq!(vec![StatusLineElement::WindowZoom], config.left);
+    }
 }
 
 // Cursor shape is read and used on every rendered frame and so needs
