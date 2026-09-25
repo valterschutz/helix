@@ -162,13 +162,15 @@ where
     }
 }
 
+const WINDOW_ZOOM_STYLE: &str = "ui.statusline.zoom";
+
 fn render_window_zoom<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
     if let Some(indicator) = window_zoom_indicator(context.editor.tree.is_zoomed(), context.focused)
     {
-        let style = context.editor.theme.get("ui.statusline.normal");
+        let style = context.editor.theme.get(WINDOW_ZOOM_STYLE);
         write(context, Span::styled(indicator, style));
     }
 }
@@ -612,10 +614,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::window_zoom_indicator;
+    use super::{window_zoom_indicator, WINDOW_ZOOM_STYLE};
 
     #[test]
     fn window_zoom_indicator_only_appears_in_focused_zoomed_view() {
+        assert_eq!("ui.statusline.zoom", WINDOW_ZOOM_STYLE);
         assert_eq!(Some(" ZOOM "), window_zoom_indicator(true, true));
         assert_eq!(None, window_zoom_indicator(false, true));
         assert_eq!(None, window_zoom_indicator(true, false));
