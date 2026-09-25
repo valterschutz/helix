@@ -9,7 +9,8 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
   closing the other splits. Window navigation and layout restoration continue
   to work while zoomed.
 - The configurable `window-zoom` statusline element displays `ZOOM` while the
-  current window is zoomed.
+  current window is zoomed. Its `ui.statusline.zoom` theme scope allows it to
+  look distinct from the normal-mode indicator.
 
 ## 2026-09-24
 
