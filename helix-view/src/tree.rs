@@ -8,7 +8,7 @@ pub struct Tree {
     root: ViewId,
     // (container, index inside the container)
     pub focus: ViewId,
-    // fullscreen: bool,
+    zoomed: Option<Rect>,
     area: Rect,
 
     nodes: SlotMap<ViewId, Node>,
@@ -96,7 +96,7 @@ impl Tree {
         Self {
             root,
             focus: root,
-            // fullscreen: false,
+            zoomed: None,
             area,
             nodes,
             stack: Vec::new(),
@@ -280,6 +280,18 @@ impl Tree {
         })
     }
 
+    pub fn visible_views(&self) -> impl Iterator<Item = (&View, bool)> {
+        let focus = self.focus;
+        let zoomed = self.zoomed.is_some();
+        self.nodes.iter().filter_map(move |(key, node)| match node {
+            Node {
+                content: Content::View(view),
+                ..
+            } if !zoomed || focus == key => Some((view.as_ref(), focus == key)),
+            _ => None,
+        })
+    }
+
     pub fn views_mut(&mut self) -> impl Iterator<Item = (&mut View, bool)> {
         let focus = self.focus;
         self.nodes
@@ -341,6 +353,19 @@ impl Tree {
             } => container.children.is_empty(),
             _ => unreachable!(),
         }
+    }
+
+    pub fn is_zoomed(&self) -> bool {
+        self.zoomed.is_some()
+    }
+
+    pub fn toggle_zoom(&mut self) {
+        self.zoomed = if self.zoomed.is_some() {
+            None
+        } else {
+            Some(Rect::default())
+        };
+        self.recalculate();
     }
 
     pub fn resize(&mut self, area: Rect) -> bool {
@@ -439,6 +464,11 @@ impl Tree {
                 }
             }
         }
+
+        if self.zoomed.is_some() {
+            self.zoomed = Some(self.get(self.focus).area);
+            self.get_mut(self.focus).area = self.area;
+        }
     }
 
     pub fn traverse(&self) -> Traverse<'_> {
@@ -510,7 +540,10 @@ impl Tree {
             }
         };
         let (current_x, current_y) = match &self.nodes[self.focus].content {
-            Content::View(current_view) => (current_view.area.left(), current_view.area.top()),
+            Content::View(current_view) => {
+                let area = self.zoomed.unwrap_or(current_view.area);
+                (area.left(), area.top())
+            }
             Content::Container(_) => unreachable!(),
         };
 
@@ -897,6 +930,35 @@ mod test {
         assert_eq!(doc_id(&tree, l1), Some(doc_l1));
         assert_eq!(doc_id(&tree, l2), Some(doc_r0));
         assert_eq!(doc_id(&tree, r0), Some(doc_l0));
+    }
+
+    #[test]
+    fn toggle_zoom_maximizes_and_restores_focused_view() {
+        let tree_area = Rect::new(0, 0, 180, 80);
+        let mut tree = Tree::new(tree_area);
+        tree.insert(View::new(DocumentId::default(), GutterConfig::default()));
+        tree.split(
+            View::new(DocumentId::default(), GutterConfig::default()),
+            Layout::Vertical,
+        );
+
+        let unzoomed_areas = tree.views().map(|(view, _)| view.area).collect::<Vec<_>>();
+
+        tree.toggle_zoom();
+
+        assert!(tree.is_zoomed());
+        assert_eq!(2, tree.views().count());
+        assert_eq!(1, tree.visible_views().count());
+        assert_eq!(tree_area, tree.get(tree.focus).area);
+
+        tree.toggle_zoom();
+
+        assert!(!tree.is_zoomed());
+        assert_eq!(2, tree.visible_views().count());
+        assert_eq!(
+            unzoomed_areas,
+            tree.views().map(|(view, _)| view.area).collect::<Vec<_>>()
+        );
     }
 
     #[test]

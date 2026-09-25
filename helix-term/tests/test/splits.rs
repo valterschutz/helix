@@ -128,6 +128,41 @@ async fn test_split_write_quit_same_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_window_zoom_toggle() -> anyhow::Result<()> {
+    let mut app = helpers::AppBuilder::new().build()?;
+
+    test_key_sequences(
+        &mut app,
+        vec![
+            (
+                Some("<C-w>v<C-w>e<C-w>w"),
+                Some(&|app| {
+                    assert!(app.editor.tree.is_zoomed());
+                    assert_eq!(2, app.editor.tree.views().count());
+                    assert_eq!(1, app.editor.tree.visible_views().count());
+                    assert_eq!(
+                        app.editor.tree.area(),
+                        app.editor.tree.get(app.editor.tree.focus).area
+                    );
+                }),
+            ),
+            (
+                Some("<C-w>e"),
+                Some(&|app| {
+                    assert!(!app.editor.tree.is_zoomed());
+                    assert_eq!(2, app.editor.tree.visible_views().count());
+                }),
+            ),
+            (Some("<C-w>o"), None),
+        ],
+        false,
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_changes_in_splits_apply_to_all_views() -> anyhow::Result<()> {
     // See <https://github.com/helix-editor/helix/issues/4732>.
     // Transactions must be applied to any view that has the changed document open.

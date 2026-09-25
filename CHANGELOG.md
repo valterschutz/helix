@@ -3,6 +3,12 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## 2026-09-25
+
+- `Ctrl-w e` (and `Space w e`) toggles zoom for the current window without
+  closing the other splits. Window navigation and layout restoration continue
+  to work while zoomed.
+
 ## 2026-09-24
 
 - Counted vertical movement follows document lines: `j`/`k` (and `Down`/`Up`,
