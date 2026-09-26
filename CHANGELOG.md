@@ -3,6 +3,12 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## 2026-09-26
+
+- `Space A` opens an inline pi chat for one selected code range. Enter sends the
+  selection and request to pi, the review view compares old and proposed code
+  side by side, further messages refine the proposal, and `Ctrl-s` applies it.
+
 ## 2026-09-25
 
 - `Ctrl-w e` (and `Space w e`) toggles zoom for the current window without
