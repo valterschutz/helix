@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::Stdio, time::Duration};
 
 use anyhow::{bail, Context as _};
-use helix_core::{Range, Selection, Tendril, Transaction};
+use helix_core::{Position, Range, Selection, Tendril, Transaction};
 use helix_view::{
     graphics::{CursorKind, Margin, Rect},
     DocumentId, Editor, ViewId,
@@ -216,36 +216,25 @@ impl AiChat {
         Ok(())
     }
 
-    fn modal_area(viewport: Rect) -> Rect {
-        let width = viewport.width.saturating_sub(4).min(140);
-        let height = viewport.height.saturating_sub(4).min(42);
-        Rect::new(
-            viewport.x + viewport.width.saturating_sub(width) / 2,
-            viewport.y + viewport.height.saturating_sub(height) / 2,
-            width,
-            height,
-        )
+    fn positioned_area(&self, viewport: Rect, editor: &Editor) -> Rect {
+        let maximum_content = (
+            viewport.width.saturating_sub(2),
+            viewport.height.saturating_sub(2),
+        );
+        let (content_width, content_height) = required_dimensions(self.phase, maximum_content);
+        let size = (
+            content_width.saturating_add(2).min(viewport.width),
+            content_height.saturating_add(2).min(viewport.height),
+        );
+        position_near_selection(viewport, editor.cursor().0.unwrap_or_default(), size)
     }
 
     fn render_code(&self, area: Rect, surface: &mut Surface, cx: &Context) {
-        if area.area() == 0 {
+        let Some(proposed) = self.proposed.as_deref() else {
             return;
-        }
-
-        match self.proposed.as_deref() {
-            Some(proposed) => self.render_comparison(area, surface, cx, proposed),
-            None => {
-                let block = Block::bordered()
-                    .title(" Selected code ")
-                    .border_style(cx.editor.theme.get("ui.text"));
-                let inner = block.inner(area).inner(Margin::horizontal(1));
-                block.render(area, surface);
-                let text = Text::from(self.original.as_str());
-                Paragraph::new(&text)
-                    .style(cx.editor.theme.get("ui.text"))
-                    .scroll((self.scroll, 0))
-                    .render(inner, surface);
-            }
+        };
+        if area.area() > 0 {
+            self.render_comparison(area, surface, cx, proposed);
         }
     }
 
@@ -330,7 +319,7 @@ impl Component for AiChat {
     }
 
     fn render(&mut self, viewport: Rect, surface: &mut Surface, cx: &mut Context) {
-        let area = Self::modal_area(viewport);
+        let area = self.positioned_area(viewport, cx.editor);
         if area.area() == 0 {
             return;
         }
@@ -351,8 +340,10 @@ impl Component for AiChat {
         outer.render(area, surface);
 
         let footer_height = 2.min(inner.height);
-        let code_area = inner.clip_bottom(footer_height);
-        self.render_code(code_area, surface, cx);
+        if self.phase == Phase::Review {
+            let code_area = inner.clip_bottom(footer_height);
+            self.render_code(code_area, surface, cx);
+        }
 
         self.prompt_area = Rect::new(
             inner.x,
@@ -404,6 +395,37 @@ impl Component for AiChat {
 
     fn id(&self) -> Option<&'static str> {
         Some(ID)
+    }
+}
+
+fn position_near_selection(viewport: Rect, anchor: Position, size: (u16, u16)) -> Rect {
+    assert!(
+        size.0 <= viewport.width,
+        "popup width must fit the viewport"
+    );
+    assert!(
+        size.1 <= viewport.height,
+        "popup height must fit the viewport"
+    );
+
+    let anchor_x = u16::try_from(anchor.col).unwrap_or(u16::MAX);
+    let anchor_y = u16::try_from(anchor.row).unwrap_or(u16::MAX);
+    let x = anchor_x.clamp(viewport.x, viewport.right().saturating_sub(size.0));
+    let below = anchor_y.saturating_add(1);
+    let y = if below.saturating_add(size.1) <= viewport.bottom() {
+        below
+    } else {
+        anchor_y.saturating_sub(size.1)
+    }
+    .clamp(viewport.y, viewport.bottom().saturating_sub(size.1));
+
+    Rect::new(x, y, size.0, size.1)
+}
+
+fn required_dimensions(phase: Phase, viewport: (u16, u16)) -> (u16, u16) {
+    match phase {
+        Phase::Input | Phase::Waiting => (viewport.0.min(72), viewport.1.min(2)),
+        Phase::Review => (viewport.0.min(118), viewport.1.min(24)),
     }
 }
 
@@ -469,7 +491,43 @@ async fn run_pi(cwd: PathBuf, input: String) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_request, parse_response, ConversationTurn, RequestContext};
+    use super::{
+        build_request, parse_response, position_near_selection, required_dimensions,
+        ConversationTurn, Phase, RequestContext,
+    };
+    use helix_core::Position;
+    use helix_view::graphics::Rect;
+
+    #[test]
+    fn input_is_a_compact_chat_box() {
+        assert_eq!(required_dimensions(Phase::Input, (118, 24)), (72, 2));
+        assert_eq!(required_dimensions(Phase::Waiting, (40, 1)), (40, 1));
+    }
+
+    #[test]
+    fn review_uses_available_popup_space() {
+        assert_eq!(required_dimensions(Phase::Review, (118, 24)), (118, 24));
+    }
+
+    #[test]
+    fn chat_is_positioned_below_the_selection() {
+        let viewport = Rect::new(0, 0, 100, 30);
+
+        assert_eq!(
+            position_near_selection(viewport, Position::new(5, 10), (74, 4)),
+            Rect::new(10, 6, 74, 4)
+        );
+    }
+
+    #[test]
+    fn chat_stays_on_screen_near_the_bottom_right() {
+        let viewport = Rect::new(0, 0, 100, 30);
+
+        assert_eq!(
+            position_near_selection(viewport, Position::new(28, 90), (74, 4)),
+            Rect::new(26, 24, 74, 4)
+        );
+    }
 
     #[test]
     fn parses_json_response() {
