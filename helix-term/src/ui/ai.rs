@@ -1,4 +1,10 @@
-use std::{path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    collections::HashMap,
+    env, fs,
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
+};
 
 use anyhow::{bail, Context as _};
 use helix_core::{
@@ -13,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
 use tui::{
     buffer::Buffer as Surface,
-    text::Text,
+    text::{Span, Text},
     widgets::{Block, Paragraph, Widget},
 };
 
@@ -28,6 +34,78 @@ pub const ID: &str = "ai-chat";
 const SYSTEM_PROMPT: &str = r#"You are an inline code transformation engine. Respond with exactly one JSON object and no Markdown fences or prose: {"replacement":"the complete replacement snippet"}. The replacement must contain the entire code snippet, including unchanged code. Apply the user's latest request while respecting the prior conversation. Never edit files or return a patch."#;
 const PI_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_INPUT_HEIGHT: u16 = 8;
+const DEFAULT_THINKING_LEVEL: ThinkingLevel = ThinkingLevel::Medium;
+const ALL_THINKING_LEVELS: [ThinkingLevel; 7] = [
+    ThinkingLevel::Off,
+    ThinkingLevel::Minimal,
+    ThinkingLevel::Low,
+    ThinkingLevel::Medium,
+    ThinkingLevel::High,
+    ThinkingLevel::Xhigh,
+    ThinkingLevel::Max,
+];
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ThinkingLevel {
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl ThinkingLevel {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct AiPreferences {
+    model: String,
+    thinking: ThinkingLevel,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PiSettings {
+    default_provider: Option<String>,
+    default_model: Option<String>,
+    default_thinking_level: Option<ThinkingLevel>,
+    enabled_models: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct CatalogProvider {
+    models: Vec<CatalogModel>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogModel {
+    id: String,
+    #[serde(default)]
+    reasoning: bool,
+    #[serde(default)]
+    thinking_level_map: HashMap<String, Option<String>>,
+}
+
+struct AiConfiguration {
+    preferences: AiPreferences,
+    scoped_models: Vec<String>,
+    thinking_levels: HashMap<String, Vec<ThinkingLevel>>,
+}
 
 #[derive(Clone, Serialize)]
 struct ConversationTurn {
@@ -70,6 +148,9 @@ pub struct AiChat {
     conversation: Vec<ConversationTurn>,
     prompt: Prompt,
     phase: Phase,
+    preferences: AiPreferences,
+    scoped_models: Vec<String>,
+    thinking_levels: HashMap<String, Vec<ThinkingLevel>>,
     scroll: u16,
     prompt_cursor: Option<Position>,
 }
@@ -95,6 +176,8 @@ impl AiChat {
             "AI edit requires a working directory"
         );
 
+        let ai_configuration = load_ai_configuration();
+
         Self {
             document_id,
             view_id,
@@ -113,6 +196,9 @@ impl AiChat {
                 |_, _, _: PromptEvent| {},
             ),
             phase: Phase::Input,
+            preferences: ai_configuration.preferences,
+            scoped_models: ai_configuration.scoped_models,
+            thinking_levels: ai_configuration.thinking_levels,
             scroll: 0,
             prompt_cursor: None,
         }
@@ -135,12 +221,13 @@ impl AiChat {
         };
         let input = build_request(context);
         let cwd = self.cwd.clone();
+        let preferences = self.preferences.clone();
 
         self.phase = Phase::Waiting;
         self.prompt.set_line(String::new(), cx.editor);
 
         cx.jobs.callback(async move {
-            let result = run_pi(cwd, input).await;
+            let result = run_pi(cwd, input, preferences).await;
             Ok(job::Callback::EditorCompositor(Box::new(
                 move |editor, compositor| {
                     let Some(chat) = compositor.find_id::<AiChat>(ID) else {
@@ -281,17 +368,17 @@ impl AiChat {
         let left = Rect::new(area.x, area.y, left_width, area.height);
         let right = Rect::new(area.x + left_width + 1, area.y, right_width, area.height);
 
-        let comparison = cx
+        let original = cx
             .editor
             .theme
-            .try_get("ui.ai.comparison")
-            .unwrap_or_else(|| cx.editor.theme.get("ui.text.focus"));
+            .try_get("ui.ai.original")
+            .unwrap_or_else(|| cx.editor.theme.get("diff.minus"));
         let output = cx
             .editor
             .theme
             .try_get("ui.ai.output")
             .unwrap_or_else(|| cx.editor.theme.get("diff.plus"));
-        let old_block = Block::bordered().title(" Old ").border_style(comparison);
+        let old_block = Block::bordered().title(" Old ").border_style(original);
         let new_block = Block::bordered().title(" New ").border_style(output);
         let old_inner = old_block.inner(left).inner(Margin::horizontal(1));
         let new_inner = new_block.inner(right).inner(Margin::horizontal(1));
@@ -308,6 +395,45 @@ impl AiChat {
             .style(cx.editor.theme.get("ui.text"))
             .scroll((self.scroll, 0))
             .render(new_inner, surface);
+    }
+
+    fn cycle_model(&mut self, editor: &mut Editor) {
+        let Some(model) = next_scoped_model(&self.preferences.model, &self.scoped_models) else {
+            editor.set_error("Pi has no scoped models configured");
+            return;
+        };
+        self.preferences.model = model.to_owned();
+        let supported = self.supported_thinking_levels();
+        self.preferences.thinking = clamp_thinking_level(self.preferences.thinking, supported);
+        self.persist_preferences(editor);
+    }
+
+    fn cycle_thinking_level(&mut self, editor: &mut Editor) {
+        self.preferences.thinking =
+            next_thinking_level(self.preferences.thinking, self.supported_thinking_levels());
+        self.persist_preferences(editor);
+    }
+
+    fn supported_thinking_levels(&self) -> &[ThinkingLevel] {
+        self.thinking_levels
+            .get(&self.preferences.model)
+            .map(Vec::as_slice)
+            .unwrap_or(&ALL_THINKING_LEVELS)
+    }
+
+    fn persist_preferences(&self, editor: &mut Editor) {
+        if let Err(error) = save_ai_preferences(&self.preferences) {
+            editor.set_error(format!("Could not save AI edit preferences: {error:#}"));
+        }
+    }
+
+    fn prompt_title(&self) -> String {
+        let model = self
+            .preferences
+            .model
+            .rsplit_once('/')
+            .map_or(self.preferences.model.as_str(), |(_, model)| model);
+        format!(" {model} · {} ", self.preferences.thinking.as_str())
     }
 
     fn close_result() -> EventResult {
@@ -342,6 +468,14 @@ impl Component for AiChat {
             },
             ctrl!('s') => {
                 cx.editor.set_error("Wait for pi to propose a replacement");
+                EventResult::Consumed(None)
+            }
+            key!(Tab) if self.phase != Phase::Waiting => {
+                self.cycle_model(cx.editor);
+                EventResult::Consumed(None)
+            }
+            shift!(Tab) if self.phase != Phase::Waiting => {
+                self.cycle_thinking_level(cx.editor);
                 EventResult::Consumed(None)
             }
             shift!(Enter) if self.phase != Phase::Waiting => {
@@ -389,15 +523,19 @@ impl Component for AiChat {
             .try_get("ui.ai.comparison")
             .unwrap_or_else(|| cx.editor.theme.get("ui.text.focus"));
         let has_comparison = self.proposed.is_some();
+        let prompt_title = self.prompt_title();
         let outer_border = if has_comparison {
             comparison_border
         } else {
             prompt_border
         };
         surface.clear_with(area, background);
-        let outer = Block::bordered()
+        let mut outer = Block::bordered()
             .style(background)
             .border_style(outer_border);
+        if !has_comparison {
+            outer = outer.title(Span::styled(prompt_title.clone(), prompt_border));
+        }
         let inner = outer.inner(area).inner(Margin::horizontal(1));
         outer.render(area, surface);
 
@@ -416,6 +554,7 @@ impl Component for AiChat {
                 prompt_height,
             );
             let prompt_block = Block::bordered()
+                .title(Span::styled(prompt_title, prompt_border))
                 .style(background)
                 .border_style(prompt_border);
             let input_area = prompt_block.inner(prompt_area).inner(Margin::horizontal(1));
@@ -440,6 +579,160 @@ impl Component for AiChat {
     fn id(&self) -> Option<&'static str> {
         Some(ID)
     }
+}
+
+fn next_scoped_model<'a>(current: &str, scoped_models: &'a [String]) -> Option<&'a str> {
+    if scoped_models.is_empty() {
+        return None;
+    }
+    let next = scoped_models
+        .iter()
+        .position(|model| model == current)
+        .map_or(0, |index| (index + 1) % scoped_models.len());
+    Some(scoped_models[next].as_str())
+}
+
+fn next_thinking_level(current: ThinkingLevel, supported: &[ThinkingLevel]) -> ThinkingLevel {
+    assert!(
+        !supported.is_empty(),
+        "a model must support at least one thinking level"
+    );
+    let next = supported
+        .iter()
+        .position(|level| *level == current)
+        .map_or(0, |index| (index + 1) % supported.len());
+    supported[next]
+}
+
+fn clamp_thinking_level(requested: ThinkingLevel, supported: &[ThinkingLevel]) -> ThinkingLevel {
+    assert!(
+        !supported.is_empty(),
+        "a model must support at least one thinking level"
+    );
+    if supported.contains(&requested) {
+        return requested;
+    }
+
+    let requested_index = ALL_THINKING_LEVELS
+        .iter()
+        .position(|level| *level == requested)
+        .expect("all thinking levels must be ordered");
+    ALL_THINKING_LEVELS[requested_index..]
+        .iter()
+        .chain(ALL_THINKING_LEVELS[..requested_index].iter().rev())
+        .find(|level| supported.contains(level))
+        .copied()
+        .unwrap_or(supported[0])
+}
+
+fn reconcile_preferences(
+    stored: Option<AiPreferences>,
+    default: &AiPreferences,
+    scoped_models: &[String],
+) -> AiPreferences {
+    let Some(mut preferences) = stored else {
+        return default.clone();
+    };
+    if preferences.model != default.model
+        && !scoped_models
+            .iter()
+            .any(|model| model == &preferences.model)
+    {
+        preferences.model = scoped_models
+            .first()
+            .cloned()
+            .unwrap_or_else(|| default.model.clone());
+    }
+    preferences
+}
+
+fn pi_agent_dir() -> Option<PathBuf> {
+    env::var_os("PI_CODING_AGENT_DIR")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".pi/agent")))
+        .or_else(|| env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(".pi/agent")))
+}
+
+fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
+    let contents = fs::read(path).ok()?;
+    serde_json::from_slice(&contents).ok()
+}
+
+fn load_ai_configuration() -> AiConfiguration {
+    let agent_dir = pi_agent_dir();
+    let settings: PiSettings = agent_dir
+        .as_deref()
+        .and_then(|directory| read_json(&directory.join("settings.json")))
+        .unwrap_or_default();
+    let scoped_models = settings.enabled_models.unwrap_or_default();
+    let model = match (settings.default_provider, settings.default_model) {
+        (Some(provider), Some(model)) => format!("{provider}/{model}"),
+        _ => scoped_models.first().cloned().unwrap_or_default(),
+    };
+    let default = AiPreferences {
+        model,
+        thinking: settings
+            .default_thinking_level
+            .unwrap_or(DEFAULT_THINKING_LEVEL),
+    };
+    let stored = read_json(&ai_preferences_path());
+    let mut preferences = reconcile_preferences(stored, &default, &scoped_models);
+    let thinking_levels = agent_dir
+        .as_deref()
+        .and_then(|directory| load_thinking_levels(&directory.join("models-store.json")))
+        .unwrap_or_default();
+    let supported = thinking_levels
+        .get(&preferences.model)
+        .map(Vec::as_slice)
+        .unwrap_or(&ALL_THINKING_LEVELS);
+    preferences.thinking = clamp_thinking_level(preferences.thinking, supported);
+
+    AiConfiguration {
+        preferences,
+        scoped_models,
+        thinking_levels,
+    }
+}
+
+fn load_thinking_levels(path: &Path) -> Option<HashMap<String, Vec<ThinkingLevel>>> {
+    let catalog: HashMap<String, CatalogProvider> = read_json(path)?;
+    let mut levels = HashMap::new();
+    for (provider, catalog) in catalog {
+        for model in catalog.models {
+            let supported = if model.reasoning {
+                ALL_THINKING_LEVELS
+                    .iter()
+                    .copied()
+                    .filter(|level| match level {
+                        ThinkingLevel::Xhigh | ThinkingLevel::Max => model
+                            .thinking_level_map
+                            .get(level.as_str())
+                            .is_some_and(Option::is_some),
+                        _ => !matches!(model.thinking_level_map.get(level.as_str()), Some(None)),
+                    })
+                    .collect()
+            } else {
+                vec![ThinkingLevel::Off]
+            };
+            levels.insert(format!("{provider}/{}", model.id), supported);
+        }
+    }
+    Some(levels)
+}
+
+fn ai_preferences_path() -> PathBuf {
+    helix_loader::data_dir().join("ai-preferences.json")
+}
+
+fn save_ai_preferences(preferences: &AiPreferences) -> anyhow::Result<()> {
+    let path = ai_preferences_path();
+    let parent = path
+        .parent()
+        .context("AI preference path must have a parent directory")?;
+    fs::create_dir_all(parent).context("could not create the Helix data directory")?;
+    let contents = serde_json::to_vec_pretty(preferences)
+        .context("could not serialize AI edit preferences")?;
+    fs::write(path, contents).context("could not write AI edit preferences")
 }
 
 fn position_near_selection(viewport: Rect, anchor: Position, size: (u16, u16)) -> Rect {
@@ -501,21 +794,24 @@ fn parse_response(output: &str) -> anyhow::Result<String> {
     Ok(response.replacement)
 }
 
-async fn run_pi(cwd: PathBuf, input: String) -> anyhow::Result<String> {
+async fn run_pi(cwd: PathBuf, input: String, preferences: AiPreferences) -> anyhow::Result<String> {
     let mut command = Command::new("pi");
+    command.current_dir(cwd).args([
+        "--print",
+        "--no-session",
+        "--no-tools",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-context-files",
+        "--system-prompt",
+        SYSTEM_PROMPT,
+    ]);
+    if !preferences.model.is_empty() {
+        command.args(["--model", &preferences.model]);
+    }
     command
-        .current_dir(cwd)
-        .args([
-            "--print",
-            "--no-session",
-            "--no-tools",
-            "--no-extensions",
-            "--no-skills",
-            "--no-prompt-templates",
-            "--no-context-files",
-            "--system-prompt",
-            SYSTEM_PROMPT,
-        ])
+        .args(["--thinking", preferences.thinking.as_str()])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -547,8 +843,9 @@ async fn run_pi(cwd: PathBuf, input: String) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_request, parse_response, position_near_selection, required_dimensions,
-        ConversationTurn, Phase, RequestContext,
+        build_request, next_scoped_model, next_thinking_level, parse_response,
+        position_near_selection, reconcile_preferences, required_dimensions, AiPreferences,
+        ConversationTurn, Phase, RequestContext, ThinkingLevel,
     };
     use helix_core::Position;
     use helix_view::graphics::Rect;
@@ -618,6 +915,75 @@ mod tests {
             parse_response("```json\n{\"replacement\":\"let result = 42;\"}\n```").unwrap();
 
         assert_eq!(response, "let result = 42;");
+    }
+
+    #[test]
+    fn model_cycle_enters_and_wraps_the_pi_scope() {
+        let scoped = vec![
+            "openai-codex/gpt-6-sol".to_owned(),
+            "openai-codex/gpt-6-luna".to_owned(),
+            "openai-codex/gpt-6-astra".to_owned(),
+        ];
+
+        assert_eq!(
+            next_scoped_model("openai-codex/gpt-5.5", &scoped),
+            Some("openai-codex/gpt-6-sol")
+        );
+        assert_eq!(
+            next_scoped_model("openai-codex/gpt-6-sol", &scoped),
+            Some("openai-codex/gpt-6-luna")
+        );
+        assert_eq!(
+            next_scoped_model("openai-codex/gpt-6-astra", &scoped),
+            Some("openai-codex/gpt-6-sol")
+        );
+    }
+
+    #[test]
+    fn thinking_cycle_uses_only_levels_supported_by_the_model() {
+        let supported = [
+            ThinkingLevel::Off,
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+        ];
+
+        assert_eq!(
+            next_thinking_level(ThinkingLevel::Off, &supported),
+            ThinkingLevel::Low
+        );
+        assert_eq!(
+            next_thinking_level(ThinkingLevel::High, &supported),
+            ThinkingLevel::Off
+        );
+    }
+
+    #[test]
+    fn saved_pi_default_is_valid_outside_the_scope_but_stale_models_are_not() {
+        let default = AiPreferences {
+            model: "openai-codex/gpt-5.5".to_owned(),
+            thinking: ThinkingLevel::Medium,
+        };
+        let scoped = vec!["openai-codex/gpt-6-sol".to_owned()];
+
+        assert_eq!(
+            reconcile_preferences(Some(default.clone()), &default, &scoped),
+            default
+        );
+        assert_eq!(
+            reconcile_preferences(
+                Some(AiPreferences {
+                    model: "openai-codex/retired".to_owned(),
+                    thinking: ThinkingLevel::High,
+                }),
+                &default,
+                &scoped,
+            ),
+            AiPreferences {
+                model: "openai-codex/gpt-6-sol".to_owned(),
+                thinking: ThinkingLevel::High,
+            }
+        );
     }
 
     #[test]

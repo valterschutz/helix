@@ -5,11 +5,14 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
 ## 2026-09-26
 
-- `Space A` opens a compact, label-free pi chat below one selected code range
-  without duplicating the selection. Prompt and comparison borders are Mauve,
-  the waiting prompt is Yellow, and only pi's proposed output is Green.
-  `Shift-Enter` inserts prompt line breaks; Enter sends the request. The review
-  stays visible while refinements run, and `Ctrl-s` applies the proposal.
+- `Space A` opens a compact pi chat below one selected code range without
+  duplicating it. The prompt title shows the active model and thinking level;
+  `Tab` cycles pi's scoped models and `Shift-Tab` cycles supported thinking
+  levels, with both choices retained across conversations. Prompt and outer
+  comparison borders are Mauve, waiting prompts are Yellow, original code is
+  Red, and proposed output is Green. `Shift-Enter` inserts prompt line breaks;
+  Enter sends, the review remains visible during refinements, and `Ctrl-s`
+  applies the proposal.
 
 ## 2026-09-25
 
