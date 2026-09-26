@@ -226,8 +226,12 @@ impl AiChat {
             viewport.width.saturating_sub(2),
             viewport.height.saturating_sub(2),
         );
-        let (content_width, content_height) =
-            required_dimensions(self.phase, maximum_content, self.input_height());
+        let (content_width, content_height) = required_dimensions(
+            self.phase,
+            maximum_content,
+            self.input_height(),
+            self.proposed.is_some(),
+        );
         let size = (
             content_width.saturating_add(2).min(viewport.width),
             content_height.saturating_add(2).min(viewport.height),
@@ -277,12 +281,18 @@ impl AiChat {
         let left = Rect::new(area.x, area.y, left_width, area.height);
         let right = Rect::new(area.x + left_width + 1, area.y, right_width, area.height);
 
-        let old_block = Block::bordered()
-            .title(" Old ")
-            .border_style(cx.editor.theme.get("diff.minus"));
-        let new_block = Block::bordered()
-            .title(" New ")
-            .border_style(cx.editor.theme.get("diff.plus"));
+        let comparison = cx
+            .editor
+            .theme
+            .try_get("ui.ai.comparison")
+            .unwrap_or_else(|| cx.editor.theme.get("ui.text.focus"));
+        let output = cx
+            .editor
+            .theme
+            .try_get("ui.ai.output")
+            .unwrap_or_else(|| cx.editor.theme.get("diff.plus"));
+        let old_block = Block::bordered().title(" Old ").border_style(comparison);
+        let new_block = Block::bordered().title(" New ").border_style(output);
         let old_inner = old_block.inner(left).inner(Margin::horizontal(1));
         let new_inner = new_block.inner(right).inner(Margin::horizontal(1));
         old_block.render(left, surface);
@@ -362,7 +372,7 @@ impl Component for AiChat {
         }
 
         let background = cx.editor.theme.get("ui.popup");
-        let border = if self.phase == Phase::Waiting {
+        let prompt_border = if self.phase == Phase::Waiting {
             cx.editor
                 .theme
                 .try_get("ui.ai.waiting")
@@ -371,10 +381,23 @@ impl Component for AiChat {
             cx.editor
                 .theme
                 .try_get("ui.ai.input")
-                .unwrap_or_else(|| cx.editor.theme.get("diff.plus"))
+                .unwrap_or_else(|| cx.editor.theme.get("ui.text.focus"))
+        };
+        let comparison_border = cx
+            .editor
+            .theme
+            .try_get("ui.ai.comparison")
+            .unwrap_or_else(|| cx.editor.theme.get("ui.text.focus"));
+        let has_comparison = self.proposed.is_some();
+        let outer_border = if has_comparison {
+            comparison_border
+        } else {
+            prompt_border
         };
         surface.clear_with(area, background);
-        let outer = Block::bordered().style(background).border_style(border);
+        let outer = Block::bordered()
+            .style(background)
+            .border_style(outer_border);
         let inner = outer.inner(area).inner(Margin::horizontal(1));
         outer.render(area, surface);
 
@@ -382,18 +405,25 @@ impl Component for AiChat {
             1
         } else {
             self.input_height()
+        };
+        if has_comparison {
+            let prompt_height = input_height.saturating_add(2).min(inner.height);
+            self.render_code(inner.clip_bottom(prompt_height), surface, cx);
+            let prompt_area = Rect::new(
+                inner.x,
+                inner.bottom().saturating_sub(prompt_height),
+                inner.width,
+                prompt_height,
+            );
+            let prompt_block = Block::bordered()
+                .style(background)
+                .border_style(prompt_border);
+            let input_area = prompt_block.inner(prompt_area).inner(Margin::horizontal(1));
+            prompt_block.render(prompt_area, surface);
+            self.render_input(input_area, surface, cx);
+        } else {
+            self.render_input(inner, surface, cx);
         }
-        .min(inner.height);
-        if self.phase == Phase::Review {
-            self.render_code(inner.clip_bottom(input_height), surface, cx);
-        }
-        let input_area = Rect::new(
-            inner.x,
-            inner.bottom().saturating_sub(input_height),
-            inner.width,
-            input_height,
-        );
-        self.render_input(input_area, surface, cx);
     }
 
     fn cursor(&self, _area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
@@ -436,14 +466,22 @@ fn position_near_selection(viewport: Rect, anchor: Position, size: (u16, u16)) -
     Rect::new(x, y, size.0, size.1)
 }
 
-fn required_dimensions(phase: Phase, viewport: (u16, u16), input_height: u16) -> (u16, u16) {
-    let height = match phase {
-        Phase::Input => input_height.clamp(1, MAX_INPUT_HEIGHT),
-        Phase::Waiting => 1,
-        Phase::Review => 24,
+fn required_dimensions(
+    phase: Phase,
+    viewport: (u16, u16),
+    input_height: u16,
+    has_comparison: bool,
+) -> (u16, u16) {
+    if has_comparison {
+        return (viewport.0.min(118), viewport.1.min(24));
+    }
+
+    let height = if phase == Phase::Waiting {
+        1
+    } else {
+        input_height.clamp(1, MAX_INPUT_HEIGHT)
     };
-    let width = if phase == Phase::Review { 118 } else { 72 };
-    (viewport.0.min(width), viewport.1.min(height))
+    (viewport.0.min(72), viewport.1.min(height))
 }
 
 fn build_request(context: RequestContext) -> String {
@@ -517,14 +555,34 @@ mod tests {
 
     #[test]
     fn input_is_a_compact_chat_box() {
-        assert_eq!(required_dimensions(Phase::Input, (118, 24), 1), (72, 1));
-        assert_eq!(required_dimensions(Phase::Input, (118, 24), 3), (72, 3));
-        assert_eq!(required_dimensions(Phase::Waiting, (40, 1), 3), (40, 1));
+        assert_eq!(
+            required_dimensions(Phase::Input, (118, 24), 1, false),
+            (72, 1)
+        );
+        assert_eq!(
+            required_dimensions(Phase::Input, (118, 24), 3, false),
+            (72, 3)
+        );
+        assert_eq!(
+            required_dimensions(Phase::Waiting, (40, 1), 3, false),
+            (40, 1)
+        );
     }
 
     #[test]
     fn review_uses_available_popup_space() {
-        assert_eq!(required_dimensions(Phase::Review, (118, 24), 3), (118, 24));
+        assert_eq!(
+            required_dimensions(Phase::Review, (118, 24), 3, true),
+            (118, 24)
+        );
+    }
+
+    #[test]
+    fn comparison_stays_open_while_waiting_for_a_refinement() {
+        assert_eq!(
+            required_dimensions(Phase::Waiting, (118, 24), 1, true),
+            (118, 24)
+        );
     }
 
     #[test]

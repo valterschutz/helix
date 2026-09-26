@@ -6,10 +6,10 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 ## 2026-09-26
 
 - `Space A` opens a compact, label-free pi chat below one selected code range
-  without duplicating the selection. Its border is Green while accepting input
-  and Yellow while waiting. `Shift-Enter` inserts prompt line breaks; Enter
-  sends the selection and request to pi. The review compares old and proposed
-  code side by side, further messages refine it, and `Ctrl-s` applies it.
+  without duplicating the selection. Prompt and comparison borders are Mauve,
+  the waiting prompt is Yellow, and only pi's proposed output is Green.
+  `Shift-Enter` inserts prompt line breaks; Enter sends the request. The review
+  stays visible while refinements run, and `Ctrl-s` applies the proposal.
 
 ## 2026-09-25
 

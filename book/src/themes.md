@@ -338,6 +338,8 @@ These scopes are used for theming the editor interface:
 | `ui.popup`                        | Documentation popups (e.g. Space + k)                                                          |
 | `ui.ai.input`                     | Inline pi prompt border while accepting input                                                  |
 | `ui.ai.waiting`                   | Inline pi prompt border while waiting for a response                                           |
+| `ui.ai.comparison`                | Inline pi comparison and original-code borders                                                 |
+| `ui.ai.output`                    | Inline pi proposed-output border                                                               |
 | `ui.popup.info`                   | Prompt for multiple key options                                                                |
 | `ui.picker.header`                | Header row area in pickers with multiple columns                                               |
 | `ui.picker.header.column`         | Column names in pickers with multiple columns                                                  |
