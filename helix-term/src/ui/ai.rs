@@ -1,8 +1,11 @@
 use std::{path::PathBuf, process::Stdio, time::Duration};
 
 use anyhow::{bail, Context as _};
-use helix_core::{Position, Range, Selection, Tendril, Transaction};
+use helix_core::{
+    unicode::width::UnicodeWidthStr, Position, Range, Selection, Tendril, Transaction,
+};
 use helix_view::{
+    document::Mode,
     graphics::{CursorKind, Margin, Rect},
     DocumentId, Editor, ViewId,
 };
@@ -16,7 +19,7 @@ use tui::{
 
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
-    ctrl, job, key,
+    ctrl, job, key, shift,
     ui::{Prompt, PromptEvent},
 };
 
@@ -24,6 +27,7 @@ pub const ID: &str = "ai-chat";
 
 const SYSTEM_PROMPT: &str = r#"You are an inline code transformation engine. Respond with exactly one JSON object and no Markdown fences or prose: {"replacement":"the complete replacement snippet"}. The replacement must contain the entire code snippet, including unchanged code. Apply the user's latest request while respecting the prior conversation. Never edit files or return a patch."#;
 const PI_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_INPUT_HEIGHT: u16 = 8;
 
 #[derive(Clone, Serialize)]
 struct ConversationTurn {
@@ -65,10 +69,9 @@ pub struct AiChat {
     cwd: PathBuf,
     conversation: Vec<ConversationTurn>,
     prompt: Prompt,
-    prompt_area: Rect,
     phase: Phase,
     scroll: u16,
-    error: Option<String>,
+    prompt_cursor: Option<Position>,
 }
 
 impl AiChat {
@@ -104,15 +107,14 @@ impl AiChat {
             cwd,
             conversation: Vec::new(),
             prompt: Prompt::new(
-                "Message: ".into(),
+                "".into(),
                 None,
                 |_, _| Vec::new(),
                 |_, _, _: PromptEvent| {},
             ),
-            prompt_area: Rect::default(),
             phase: Phase::Input,
             scroll: 0,
-            error: None,
+            prompt_cursor: None,
         }
     }
 
@@ -135,7 +137,6 @@ impl AiChat {
         let cwd = self.cwd.clone();
 
         self.phase = Phase::Waiting;
-        self.error = None;
         self.prompt.set_line(String::new(), cx.editor);
 
         cx.jobs.callback(async move {
@@ -166,12 +167,10 @@ impl AiChat {
                 self.proposed = Some(replacement);
                 self.phase = Phase::Review;
                 self.scroll = 0;
-                self.error = None;
             }
             Err(error) => {
                 let message = format!("pi failed: {error:#}");
-                editor.set_error(message.clone());
-                self.error = Some(message);
+                editor.set_error(message);
                 self.phase = if self.proposed.is_some() {
                     Phase::Review
                 } else {
@@ -216,12 +215,19 @@ impl AiChat {
         Ok(())
     }
 
+    fn input_height(&self) -> u16 {
+        u16::try_from(self.prompt.line().split('\n').count())
+            .unwrap_or(u16::MAX)
+            .clamp(1, MAX_INPUT_HEIGHT)
+    }
+
     fn positioned_area(&self, viewport: Rect, editor: &Editor) -> Rect {
         let maximum_content = (
             viewport.width.saturating_sub(2),
             viewport.height.saturating_sub(2),
         );
-        let (content_width, content_height) = required_dimensions(self.phase, maximum_content);
+        let (content_width, content_height) =
+            required_dimensions(self.phase, maximum_content, self.input_height());
         let size = (
             content_width.saturating_add(2).min(viewport.width),
             content_height.saturating_add(2).min(viewport.height),
@@ -236,6 +242,33 @@ impl AiChat {
         if area.area() > 0 {
             self.render_comparison(area, surface, cx, proposed);
         }
+    }
+
+    fn render_input(&mut self, area: Rect, surface: &mut Surface, cx: &Context) {
+        self.prompt_cursor = None;
+        if self.phase == Phase::Waiting || area.area() == 0 {
+            return;
+        }
+
+        let input = self.prompt.line();
+        let before_cursor = &input[..self.prompt.position()];
+        let cursor_row = before_cursor.bytes().filter(|byte| *byte == b'\n').count() as u16;
+        let cursor_col = before_cursor
+            .rsplit('\n')
+            .next()
+            .unwrap_or_default()
+            .width() as u16;
+        let vertical_scroll = cursor_row.saturating_sub(area.height.saturating_sub(1));
+        let horizontal_scroll = cursor_col.saturating_sub(area.width.saturating_sub(1));
+        let text = Text::from(input.as_str());
+        Paragraph::new(&text)
+            .style(cx.editor.theme.get("ui.text"))
+            .scroll((vertical_scroll, horizontal_scroll))
+            .render(area, surface);
+        self.prompt_cursor = Some(Position::new(
+            area.y as usize + cursor_row.saturating_sub(vertical_scroll) as usize,
+            area.x as usize + cursor_col.saturating_sub(horizontal_scroll) as usize,
+        ));
     }
 
     fn render_comparison(&self, area: Rect, surface: &mut Surface, cx: &Context, proposed: &str) {
@@ -301,6 +334,10 @@ impl Component for AiChat {
                 cx.editor.set_error("Wait for pi to propose a replacement");
                 EventResult::Consumed(None)
             }
+            shift!(Enter) if self.phase != Phase::Waiting => {
+                self.prompt.insert_str("\n", cx.editor);
+                EventResult::Consumed(None)
+            }
             key!(Enter) if self.phase != Phase::Waiting => {
                 self.submit(cx);
                 EventResult::Consumed(None)
@@ -325,71 +362,48 @@ impl Component for AiChat {
         }
 
         let background = cx.editor.theme.get("ui.popup");
-        let focus = cx.editor.theme.get("ui.text.focus");
-        surface.clear_with(area, background);
-        let title = if self.phase == Phase::Waiting {
-            " Pi edit · working… "
+        let border = if self.phase == Phase::Waiting {
+            cx.editor
+                .theme
+                .try_get("ui.ai.waiting")
+                .unwrap_or_else(|| cx.editor.theme.get("warning"))
         } else {
-            " Pi edit "
+            cx.editor
+                .theme
+                .try_get("ui.ai.input")
+                .unwrap_or_else(|| cx.editor.theme.get("diff.plus"))
         };
-        let outer = Block::bordered()
-            .title(title)
-            .style(background)
-            .border_style(focus);
+        surface.clear_with(area, background);
+        let outer = Block::bordered().style(background).border_style(border);
         let inner = outer.inner(area).inner(Margin::horizontal(1));
         outer.render(area, surface);
 
-        let footer_height = 2.min(inner.height);
+        let input_height = if self.phase == Phase::Waiting {
+            1
+        } else {
+            self.input_height()
+        }
+        .min(inner.height);
         if self.phase == Phase::Review {
-            let code_area = inner.clip_bottom(footer_height);
-            self.render_code(code_area, surface, cx);
+            self.render_code(inner.clip_bottom(input_height), surface, cx);
         }
-
-        self.prompt_area = Rect::new(
+        let input_area = Rect::new(
             inner.x,
-            inner.bottom().saturating_sub(footer_height),
+            inner.bottom().saturating_sub(input_height),
             inner.width,
-            u16::from(footer_height > 0),
+            input_height,
         );
-        if self.prompt_area.area() > 0 {
-            if self.phase == Phase::Waiting {
-                surface.set_string(
-                    self.prompt_area.x,
-                    self.prompt_area.y,
-                    "Waiting for pi…",
-                    cx.editor.theme.get("ui.text.inactive"),
-                );
-            } else {
-                self.prompt.render(self.prompt_area, surface, cx);
-            }
-        }
-
-        if footer_height > 1 {
-            let help = self.error.as_deref().unwrap_or(if self.proposed.is_some() {
-                "enter send feedback · ctrl-s apply · page-up/down scroll · esc cancel"
-            } else {
-                "enter send · page-up/down scroll · esc cancel"
-            });
-            let style = if self.error.is_some() {
-                cx.editor.theme.get("error")
-            } else {
-                cx.editor.theme.get("ui.text.inactive")
-            };
-            surface.set_stringn(
-                inner.x,
-                inner.bottom() - 1,
-                help,
-                inner.width as usize,
-                style,
-            );
-        }
+        self.render_input(input_area, surface, cx);
     }
 
-    fn cursor(&self, _area: Rect, editor: &Editor) -> (Option<helix_core::Position>, CursorKind) {
+    fn cursor(&self, _area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
         if self.phase == Phase::Waiting {
             (None, CursorKind::Hidden)
         } else {
-            self.prompt.cursor(self.prompt_area, editor)
+            (
+                self.prompt_cursor,
+                editor.config().cursor_shape.from_mode(Mode::Insert),
+            )
         }
     }
 
@@ -422,11 +436,14 @@ fn position_near_selection(viewport: Rect, anchor: Position, size: (u16, u16)) -
     Rect::new(x, y, size.0, size.1)
 }
 
-fn required_dimensions(phase: Phase, viewport: (u16, u16)) -> (u16, u16) {
-    match phase {
-        Phase::Input | Phase::Waiting => (viewport.0.min(72), viewport.1.min(2)),
-        Phase::Review => (viewport.0.min(118), viewport.1.min(24)),
-    }
+fn required_dimensions(phase: Phase, viewport: (u16, u16), input_height: u16) -> (u16, u16) {
+    let height = match phase {
+        Phase::Input => input_height.clamp(1, MAX_INPUT_HEIGHT),
+        Phase::Waiting => 1,
+        Phase::Review => 24,
+    };
+    let width = if phase == Phase::Review { 118 } else { 72 };
+    (viewport.0.min(width), viewport.1.min(height))
 }
 
 fn build_request(context: RequestContext) -> String {
@@ -500,13 +517,14 @@ mod tests {
 
     #[test]
     fn input_is_a_compact_chat_box() {
-        assert_eq!(required_dimensions(Phase::Input, (118, 24)), (72, 2));
-        assert_eq!(required_dimensions(Phase::Waiting, (40, 1)), (40, 1));
+        assert_eq!(required_dimensions(Phase::Input, (118, 24), 1), (72, 1));
+        assert_eq!(required_dimensions(Phase::Input, (118, 24), 3), (72, 3));
+        assert_eq!(required_dimensions(Phase::Waiting, (40, 1), 3), (40, 1));
     }
 
     #[test]
     fn review_uses_available_popup_space() {
-        assert_eq!(required_dimensions(Phase::Review, (118, 24)), (118, 24));
+        assert_eq!(required_dimensions(Phase::Review, (118, 24), 3), (118, 24));
     }
 
     #[test]
