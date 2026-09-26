@@ -97,6 +97,7 @@
 | `insert_mode` | Insert before selection | normal: `` i ``, select: `` i `` |
 | `append_mode` | Append after selection | normal: `` a ``, select: `` a `` |
 | `command_mode` | Enter command mode | normal: `` : ``, select: `` : `` |
+| `ai_edit` | Edit the selected code with pi | normal: `` <space>A ``, select: `` <space>A `` |
 | `file_picker` | Open file picker | normal: `` <space>f ``, select: `` <space>f `` |
 | `file_picker_in_current_buffer_directory` | Open file picker at current buffer's directory |  |
 | `file_picker_in_current_directory` | Open file picker at current working directory | normal: `` <space>F ``, select: `` <space>F `` |

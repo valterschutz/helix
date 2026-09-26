@@ -400,6 +400,7 @@ impl MappableCommand {
         insert_mode, "Insert before selection",
         append_mode, "Append after selection",
         command_mode, "Enter command mode",
+        ai_edit, "Edit the selected code with pi",
         file_picker, "Open file picker",
         file_picker_in_current_buffer_directory, "Open file picker at current buffer's directory",
         file_picker_in_current_directory, "Open file picker at current working directory",
@@ -722,6 +723,39 @@ impl PartialEq for MappableCommand {
 }
 
 fn no_op(_cx: &mut Context) {}
+
+fn ai_edit(cx: &mut Context) {
+    let chat = {
+        let (view, document) = current_ref!(cx.editor);
+        let selection = document.selection(view.id);
+        if selection.len() != 1 {
+            cx.editor
+                .set_error("AI edit supports exactly one selection");
+            return;
+        }
+
+        let range = selection.primary();
+        if range.is_empty() {
+            cx.editor
+                .set_error("Select code before starting an AI edit");
+            return;
+        }
+
+        ui::ai::AiChat::new(
+            document.id(),
+            view.id,
+            range,
+            document.version(),
+            range.fragment(document.text().slice(..)).into_owned(),
+            document.language_name().unwrap_or("text").to_owned(),
+            document
+                .path()
+                .map_or_else(|| "[scratch]".to_owned(), |path| path.display().to_string()),
+            document.workspace_root().to_path_buf(),
+        )
+    };
+    cx.push_layer(Box::new(chat));
+}
 
 type MoveFn =
     fn(RopeSlice, Range, Direction, usize, Movement, &TextFormat, &mut TextAnnotations) -> Range;
