@@ -70,6 +70,34 @@ c = ":run-shell-command cargo build"
 t = ":run-shell-command cargo test"
 ```
 
+## Descriptions in the which-key popup
+
+> This is a fork-specific addition; it isn't in upstream Helix.
+
+By default the which-key popup (opened by pausing on a pending key, e.g. after
+`Space`) shows a built-in fallback for keys that don't map to a single named
+command: `[Multiple commands]` for a command sequence, the raw command and
+its arguments for a typable command called with arguments, and a blank title
+for a sub-keymap. A `desc` field overrides that text:
+
+```toml
+[keys.normal.space.space]
+# Overrides "[Multiple commands]" for this sequence.
+x = { commands = [":w", ":buffer-close"], desc = "Save and close buffer" }
+# Overrides the raw ":sh ..." text shown for a typable command with arguments.
+e = { command = ":sh ~/.config/helix/yazi-picker.sh", desc = "Open file picker" }
+
+# Titles the sub-keymap itself, shown as the popup heading.
+[keys.normal.space.space.t]
+desc = "Toggle options"
+s = ":toggle soft-wrap.enable"
+```
+
+`desc` on a `command`/`commands` table can't be combined with other key
+bindings in the same table, and overriding `desc` for a single command is
+only supported for typable commands (`Static` and `Macro` commands already
+have a fixed, meaningful doc string).
+
 ## Special keys and modifiers
 
 Ctrl, Shift and Alt modifiers are encoded respectively with the prefixes `C-`, `S-` and `A-`.

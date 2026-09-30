@@ -4,6 +4,7 @@ pub mod macros;
 pub use crate::commands::MappableCommand;
 pub use default::default;
 
+use anyhow::{anyhow, bail, ensure};
 use arc_swap::{
     access::{DynAccess, DynGuard},
     ArcSwap,
@@ -16,6 +17,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeSet, HashMap},
     ops::{Deref, DerefMut},
+    str::FromStr,
     sync::Arc,
 };
 
@@ -65,7 +67,7 @@ impl KeyTrieNode {
                     cmd.doc()
                 }
                 KeyTrie::Node(n) => &n.name,
-                KeyTrie::Sequence(_) => "[Multiple commands]",
+                KeyTrie::Sequence(_, desc) => desc.as_deref().unwrap_or("[Multiple commands]"),
             };
             match body.iter().position(|(_, d)| d == &desc) {
                 Some(pos) => {
@@ -109,8 +111,98 @@ impl DerefMut for KeyTrieNode {
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyTrie {
     MappableCommand(MappableCommand),
-    Sequence(Vec<MappableCommand>),
+    // The second field is an optional override for the description shown in
+    // the which-key popup: without it a sequence just shows "[Multiple
+    // commands]", which isn't useful for custom bindings.
+    Sequence(Vec<MappableCommand>, Option<String>),
     Node(KeyTrieNode),
+}
+
+fn parse_command_sequence(items: Vec<toml::Value>) -> Result<Vec<MappableCommand>, anyhow::Error> {
+    let commands = items
+        .into_iter()
+        .map(|item| match item {
+            toml::Value::String(command) => command.parse::<MappableCommand>(),
+            _ => Err(anyhow!("expected a command string in a command sequence")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Prevent macro keybindings from being used in command sequences.
+    // This is meant to be a temporary restriction pending a larger
+    // refactor of how command sequences are executed.
+    ensure!(
+        !commands
+            .iter()
+            .any(|cmd| matches!(cmd, MappableCommand::Macro { .. })),
+        "macro keybindings may not be used in command sequences"
+    );
+
+    Ok(commands)
+}
+
+impl KeyTrie {
+    /// Builds a `KeyTrie` from a generic TOML value rather than straight off
+    /// a `Deserializer`, so that a table can be peeked at (for a `desc`
+    /// override or a `commands`/`command` key) before deciding whether it's
+    /// a sub-keymap. `toml::Value` implements `Deserialize` itself, so this
+    /// works from any deserializer, not just a `toml` one.
+    fn from_toml_value(value: toml::Value) -> Result<Self, anyhow::Error> {
+        match value {
+            toml::Value::String(command) => command
+                .parse::<MappableCommand>()
+                .map(KeyTrie::MappableCommand),
+            toml::Value::Array(items) => {
+                Ok(KeyTrie::Sequence(parse_command_sequence(items)?, None))
+            }
+            toml::Value::Table(mut table) => {
+                let desc = match table.remove("desc") {
+                    Some(toml::Value::String(desc)) => Some(desc),
+                    Some(_) => bail!("`desc` must be a string"),
+                    None => None,
+                };
+
+                if let Some(commands) = table.remove("commands") {
+                    ensure!(
+                        table.is_empty(),
+                        "`commands` cannot be combined with key bindings in the same table"
+                    );
+                    let toml::Value::Array(items) = commands else {
+                        bail!("`commands` must be an array of command strings");
+                    };
+                    return Ok(KeyTrie::Sequence(parse_command_sequence(items)?, desc));
+                }
+
+                if let Some(command) = table.remove("command") {
+                    ensure!(
+                        table.is_empty(),
+                        "`command` cannot be combined with key bindings in the same table"
+                    );
+                    let toml::Value::String(command) = command else {
+                        bail!("`command` must be a command string");
+                    };
+                    let mut command = command.parse::<MappableCommand>()?;
+                    if let Some(desc) = desc {
+                        match &mut command {
+                            MappableCommand::Typable { doc, .. } => *doc = desc,
+                            _ => bail!("`desc` override is only supported for typable commands"),
+                        }
+                    }
+                    return Ok(KeyTrie::MappableCommand(command));
+                }
+
+                let mut mapping = IndexMap::new();
+                for (key, value) in table {
+                    let key = KeyEvent::from_str(&key).map_err(|e| anyhow!(e))?;
+                    mapping.insert(key, KeyTrie::from_toml_value(value)?);
+                }
+                Ok(KeyTrie::Node(KeyTrieNode::new(
+                    desc.as_deref().unwrap_or(""),
+                    mapping,
+                )))
+            }
+            _ => bail!("expected a command, list of commands, or sub-keymap"),
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for KeyTrie {
@@ -118,66 +210,8 @@ impl<'de> Deserialize<'de> for KeyTrie {
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_any(KeyTrieVisitor)
-    }
-}
-
-struct KeyTrieVisitor;
-
-impl<'de> serde::de::Visitor<'de> for KeyTrieVisitor {
-    type Value = KeyTrie;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(formatter, "a command, list of commands, or sub-keymap")
-    }
-
-    fn visit_str<E>(self, command: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        command
-            .parse::<MappableCommand>()
-            .map(KeyTrie::MappableCommand)
-            .map_err(E::custom)
-    }
-
-    fn visit_seq<S>(self, mut seq: S) -> Result<Self::Value, S::Error>
-    where
-        S: serde::de::SeqAccess<'de>,
-    {
-        let mut commands = Vec::new();
-        while let Some(command) = seq.next_element::<String>()? {
-            commands.push(
-                command
-                    .parse::<MappableCommand>()
-                    .map_err(serde::de::Error::custom)?,
-            )
-        }
-
-        // Prevent macro keybindings from being used in command sequences.
-        // This is meant to be a temporary restriction pending a larger
-        // refactor of how command sequences are executed.
-        if commands
-            .iter()
-            .any(|cmd| matches!(cmd, MappableCommand::Macro { .. }))
-        {
-            return Err(serde::de::Error::custom(
-                "macro keybindings may not be used in command sequences",
-            ));
-        }
-
-        Ok(KeyTrie::Sequence(commands))
-    }
-
-    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
-    where
-        M: serde::de::MapAccess<'de>,
-    {
-        let mut mapping = IndexMap::new();
-        while let Some((key, value)) = map.next_entry::<KeyEvent, KeyTrie>()? {
-            mapping.insert(key, value);
-        }
-        Ok(KeyTrie::Node(KeyTrieNode::new("", mapping)))
+        let value = toml::Value::deserialize(deserializer)?;
+        KeyTrie::from_toml_value(value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -200,7 +234,7 @@ impl KeyTrie {
                         keys.pop();
                     }
                 }
-                KeyTrie::Sequence(_) => {}
+                KeyTrie::Sequence(_, _) => {}
             };
         }
 
@@ -212,14 +246,14 @@ impl KeyTrie {
     pub fn node(&self) -> Option<&KeyTrieNode> {
         match *self {
             KeyTrie::Node(ref node) => Some(node),
-            KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_) => None,
+            KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_, _) => None,
         }
     }
 
     pub fn node_mut(&mut self) -> Option<&mut KeyTrieNode> {
         match *self {
             KeyTrie::Node(ref mut node) => Some(node),
-            KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_) => None,
+            KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_, _) => None,
         }
     }
 
@@ -237,7 +271,7 @@ impl KeyTrie {
             trie = match trie {
                 KeyTrie::Node(map) => map.get(key),
                 // leaf encountered while keys left to process
-                KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_) => None,
+                KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_, _) => None,
             }?
         }
         Some(trie)
@@ -327,7 +361,7 @@ impl Keymaps {
             Some(KeyTrie::MappableCommand(ref cmd)) => {
                 return KeymapResult::Matched(cmd.clone());
             }
-            Some(KeyTrie::Sequence(ref cmds)) => {
+            Some(KeyTrie::Sequence(ref cmds, _)) => {
                 return KeymapResult::MatchedSequence(cmds.clone());
             }
             None => return KeymapResult::NotFound,
@@ -347,7 +381,7 @@ impl Keymaps {
                 self.state.clear();
                 KeymapResult::Matched(cmd.clone())
             }
-            Some(KeyTrie::Sequence(cmds)) => {
+            Some(KeyTrie::Sequence(cmds, _)) => {
                 self.state.clear();
                 KeymapResult::MatchedSequence(cmds.clone())
             }
@@ -609,10 +643,69 @@ is_sticky = false
                         args: "sed -E 's/\\s+$//g'".to_string(),
                         doc: "".to_string(),
                     },
-                })
+                }, None)
             },
         ));
 
         assert_eq!(toml::from_str(keys), Ok(expectation));
+    }
+
+    #[test]
+    fn sequence_with_desc() {
+        let keys = r#"
+"+" = { commands = ["select_all", ":write"], desc = "Select all and save" }
+        "#;
+
+        let key = KeyEvent {
+            code: KeyCode::Char('+'),
+            modifiers: KeyModifiers::NONE,
+        };
+
+        let expectation = KeyTrie::Node(KeyTrieNode::new(
+            "",
+            indexmap! {
+                key => KeyTrie::Sequence(vec!{
+                    MappableCommand::select_all,
+                    ":write".parse::<MappableCommand>().unwrap(),
+                }, Some("Select all and save".to_string()))
+            },
+        ));
+
+        assert_eq!(toml::from_str(keys), Ok(expectation));
+    }
+
+    #[test]
+    fn command_with_desc_override() {
+        let keys = r#"
+"+" = { command = ":sh echo hi", desc = "Say hi" }
+        "#;
+
+        let key = KeyEvent {
+            code: KeyCode::Char('+'),
+            modifiers: KeyModifiers::NONE,
+        };
+
+        let trie: KeyTrie = toml::from_str(keys).unwrap();
+        let node = trie.node().unwrap();
+        match node.get(&key).unwrap() {
+            KeyTrie::MappableCommand(MappableCommand::Typable { doc, .. }) => {
+                assert_eq!(doc, "Say hi");
+            }
+            other => panic!("expected a typable command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_with_desc() {
+        let keys = r#"
+desc = "Toggle options"
+s = "select_all"
+        "#;
+
+        let trie: KeyTrie = toml::from_str(keys).unwrap();
+        match trie {
+            KeyTrie::Node(node) => assert_eq!(node.name, "Toggle options"),
+            other => panic!("expected a node, got {other:?}"),
+        }
     }
 }

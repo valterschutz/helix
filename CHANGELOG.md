@@ -3,6 +3,18 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## 2026-09-30
+
+- Keymap entries in `config.toml` can now carry a `desc` that overrides the
+  text shown in the which-key popup, instead of the built-in fallbacks
+  (`[Multiple commands]` for a sequence, blank titles for sub-keymaps, or the
+  raw command/args for a typable command called with arguments):
+  - `key = { commands = [...], desc = "..." }` for a command sequence.
+  - `key = { command = ":typable-command args", desc = "..." }` to relabel a
+    single typable command (desc overrides for `Static`/`Macro` commands are
+    rejected, since their built-in doc already covers that case).
+  - `[keys.<mode>.<path>] \n desc = "..."` to title a sub-keymap.
+
 ## 2026-09-24
 
 - Counted vertical movement follows document lines: `j`/`k` (and `Down`/`Up`,
