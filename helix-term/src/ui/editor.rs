@@ -1218,7 +1218,7 @@ impl EditorView {
         } = *event;
 
         let pos_and_view = |editor: &Editor, row, column, ignore_virtual_text| {
-            editor.tree.views().find_map(|(view, _focus)| {
+            editor.tree.visible_views().find_map(|(view, _focus)| {
                 view.pos_at_screen_coords(
                     &editor.documents[&view.doc],
                     row,
@@ -1230,7 +1230,7 @@ impl EditorView {
         };
 
         let gutter_coords_and_view = |editor: &Editor, row, column| {
-            editor.tree.views().find_map(|(view, _focus)| {
+            editor.tree.visible_views().find_map(|(view, _focus)| {
                 view.gutter_coords_at_screen_coords(row, column)
                     .map(|coords| (coords, view.id))
             })
@@ -1641,7 +1641,7 @@ impl Component for EditorView {
             Self::render_bufferline(cx.editor, area.with_height(1), surface);
         }
 
-        for (view, is_focused) in cx.editor.tree.views() {
+        for (view, is_focused) in cx.editor.tree.visible_views() {
             let doc = cx.editor.document(view.doc).unwrap();
             self.render_view(cx.editor, doc, view, area, surface, is_focused);
         }

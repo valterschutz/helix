@@ -199,6 +199,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "F" => goto_file_vsplit,
             "C-q" | "q" => wclose,
             "C-o" | "o" => wonly,
+            "e" => wzoom,
             "C-h" | "h" | "left" => jump_view_left,
             "C-j" | "j" | "down" => jump_view_down,
             "C-k" | "k" | "up" => jump_view_up,
@@ -235,6 +236,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "D" => workspace_diagnostics_picker,
             "g" => changed_file_picker,
             "a" => code_action,
+            "A" => ai_edit,
             "'" => last_picker,
             "G" => { "Debug (experimental)" sticky=true
                 "l" => dap_launch,
@@ -266,6 +268,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
                 "F" => goto_file_vsplit,
                 "C-q" | "q" => wclose,
                 "C-o" | "o" => wonly,
+                "e" => wzoom,
                 "C-h" | "h" | "left" => jump_view_left,
                 "C-j" | "j" | "down" => jump_view_down,
                 "C-k" | "k" | "up" => jump_view_up,

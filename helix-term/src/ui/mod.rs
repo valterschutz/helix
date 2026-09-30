@@ -1,3 +1,4 @@
+pub mod ai;
 mod completion;
 mod document;
 pub(crate) mod editor;

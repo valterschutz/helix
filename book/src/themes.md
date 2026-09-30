@@ -330,11 +330,17 @@ These scopes are used for theming the editor interface:
 | `ui.statusline.normal`            | Statusline mode during normal mode ([only if `editor.color-modes` is enabled][editor-section]) |
 | `ui.statusline.insert`            | Statusline mode during insert mode ([only if `editor.color-modes` is enabled][editor-section]) |
 | `ui.statusline.select`            | Statusline mode during select mode ([only if `editor.color-modes` is enabled][editor-section]) |
+| `ui.statusline.zoom`              | Statusline window zoom indicator                                                               |
 | `ui.statusline.separator`         | Separator character in statusline                                                              |
 | `ui.bufferline`                   | Style for the buffer line                                                                      |
 | `ui.bufferline.active`            | Style for the active buffer in buffer line                                                     |
 | `ui.bufferline.background`        | Style for bufferline background                                                                |
 | `ui.popup`                        | Documentation popups (e.g. Space + k)                                                          |
+| `ui.ai.input`                     | Inline pi prompt border while accepting input                                                  |
+| `ui.ai.waiting`                   | Inline pi prompt border while waiting for a response                                           |
+| `ui.ai.comparison`                | Inline pi comparison border                                                                    |
+| `ui.ai.original`                  | Inline pi original-code border                                                                 |
+| `ui.ai.output`                    | Inline pi proposed-output border                                                               |
 | `ui.popup.info`                   | Prompt for multiple key options                                                                |
 | `ui.picker.header`                | Header row area in pickers with multiple columns                                               |
 | `ui.picker.header.column`         | Column names in pickers with multiple columns                                                  |

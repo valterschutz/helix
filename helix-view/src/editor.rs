@@ -804,6 +804,21 @@ pub enum StatusLineElement {
 
     /// Indicator for when code actions are available
     CodeActionHint,
+
+    /// Indicator for when the current window is zoomed
+    WindowZoom,
+}
+
+#[cfg(test)]
+mod status_line_tests {
+    use super::{StatusLineConfig, StatusLineElement};
+
+    #[test]
+    fn window_zoom_element_deserializes() {
+        let config = toml::from_str::<StatusLineConfig>(r#"left = ["window-zoom"]"#).unwrap();
+
+        assert_eq!(vec![StatusLineElement::WindowZoom], config.left);
+    }
 }
 
 // Cursor shape is read and used on every rendered frame and so needs
@@ -2293,6 +2308,10 @@ impl Editor {
         }
 
         let prev_id = std::mem::replace(&mut self.tree.focus, view_id);
+        if self.tree.is_zoomed() {
+            self.tree.recalculate();
+            self.ensure_cursor_in_view(view_id);
+        }
         doc_mut!(self).mark_as_focused();
 
         let focus_lost = self.tree.get(prev_id).doc;
@@ -2319,6 +2338,14 @@ impl Editor {
 
     pub fn swap_split_in_direction(&mut self, direction: tree::Direction) {
         self.tree.swap_split_in_direction(direction);
+        if self.tree.is_zoomed() {
+            self.tree.recalculate();
+        }
+    }
+
+    pub fn toggle_view_zoom(&mut self) {
+        self.tree.toggle_zoom();
+        self.ensure_cursor_in_view(self.tree.focus);
     }
 
     pub fn transpose_view(&mut self) {

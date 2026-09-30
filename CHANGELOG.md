@@ -15,6 +15,26 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
     rejected, since their built-in doc already covers that case).
   - `[keys.<mode>.<path>] \n desc = "..."` to title a sub-keymap.
 
+## 2026-09-26
+
+- `Space A` opens a compact pi chat below one selected code range without
+  duplicating it. The prompt title shows the active model and thinking level;
+  `Tab` cycles pi's scoped models and `Shift-Tab` cycles supported thinking
+  levels, with both choices retained across conversations. Prompt and outer
+  comparison borders are Mauve, waiting prompts are Yellow, original code is
+  Red, and proposed output is Green. `Shift-Enter` inserts prompt line breaks;
+  Enter sends, the review remains visible during refinements, and `Ctrl-s`
+  applies the proposal.
+
+## 2026-09-25
+
+- `Ctrl-w e` (and `Space w e`) toggles zoom for the current window without
+  closing the other splits. Window navigation and layout restoration continue
+  to work while zoomed.
+- The configurable `window-zoom` statusline element displays `ZOOM` while the
+  current window is zoomed. Its `ui.statusline.zoom` theme scope allows it to
+  look distinct from the normal-mode indicator.
+
 ## 2026-09-24
 
 - Counted vertical movement follows document lines: `j`/`k` (and `Down`/`Up`,
