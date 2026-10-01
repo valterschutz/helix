@@ -32,6 +32,15 @@ impl Pair {
         self.open == self.close
     }
 
+    /// true if typing whitespace directly inside the pair should insert
+    /// matching whitespace on both sides, e.g. `(|)` -> `( | )`.
+    ///
+    /// Only parentheses and braces are padded: brackets are used for markdown
+    /// task lists (`- [ ]`), and padding quotes or backticks is rarely wanted.
+    pub fn pads_whitespace(&self) -> bool {
+        matches!((self.open, self.close), ('(', ')') | ('{', '}'))
+    }
+
     /// true if all of the pair's conditions hold for the given document and range
     pub fn should_close(&self, doc: &Rope, range: &Range) -> bool {
         let mut should_close = Self::next_is_not_alpha(doc, range);
@@ -151,7 +160,7 @@ pub fn hook_delete(doc: &Rope, range: &Range, pairs: &AutoPairs) -> Option<(Dele
         log::debug!("second_prev: {}, second_next: {}", second_prev, second_next);
 
         if let Some(pair) = pairs.get(second_prev) {
-            if pair.open == second_prev && pair.close == second_next {
+            if pair.pads_whitespace() && pair.open == second_prev && pair.close == second_next {
                 return handle_delete(doc, range);
             }
         }
@@ -214,7 +223,7 @@ fn handle_insert_whitespace(
     let prev = prev_char(doc, cursor)?;
     let pair = pairs.get(cur)?;
 
-    if pair.open != prev || pair.close != cur {
+    if !pair.pads_whitespace() || pair.open != prev || pair.close != cur {
         return None;
     }
 

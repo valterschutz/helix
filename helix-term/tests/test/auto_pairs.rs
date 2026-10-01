@@ -12,6 +12,20 @@ fn matching_pairs() -> impl Iterator<Item = &'static (char, char)> {
     DEFAULT_PAIRS.iter().filter(|(open, close)| open == close)
 }
 
+/// pairs that get whitespace padding when a space is typed inside them
+fn padded_pairs() -> impl Iterator<Item = &'static (char, char)> {
+    DEFAULT_PAIRS
+        .iter()
+        .filter(|(open, _)| matches!(open, '(' | '{'))
+}
+
+/// pairs that never get whitespace padding (brackets, quotes, backticks)
+fn unpadded_pairs() -> impl Iterator<Item = &'static (char, char)> {
+    DEFAULT_PAIRS
+        .iter()
+        .filter(|(open, _)| !matches!(open, '(' | '{'))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn insert_basic() -> anyhow::Result<()> {
     for pair in DEFAULT_PAIRS {
@@ -28,7 +42,7 @@ async fn insert_basic() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn insert_whitespace() -> anyhow::Result<()> {
-    for pair in DEFAULT_PAIRS {
+    for pair in padded_pairs() {
         test((
             format!("{}#[|{}]#", pair.0, pair.1),
             "i ",
@@ -42,7 +56,7 @@ async fn insert_whitespace() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn insert_whitespace_multi() -> anyhow::Result<()> {
-    for pair in differing_pairs() {
+    for pair in padded_pairs() {
         test((
             format!(
                 indoc! {"\
@@ -74,7 +88,7 @@ async fn insert_whitespace_multi() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn append_whitespace_multi() -> anyhow::Result<()> {
-    for pair in differing_pairs() {
+    for pair in padded_pairs() {
         test((
             format!(
                 indoc! {"\
@@ -132,6 +146,24 @@ async fn insert_whitespace_no_matching_pair() -> anyhow::Result<()> {
         ))
         .await?;
     }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn insert_whitespace_unpadded_pairs() -> anyhow::Result<()> {
+    for pair in unpadded_pairs() {
+        // brackets, quotes and backticks are never padded, so that e.g.
+        // markdown task lists can be typed as `- [ ]` without a stray space
+        test((
+            format!("{}#[|{}]#", pair.0, pair.1),
+            "i ",
+            format!("{} #[|{}]#", pair.0, pair.1),
+        ))
+        .await?;
+    }
+
+    test(("- [#[|]]#", "i ", "- [ #[|]]#")).await?;
 
     Ok(())
 }
@@ -720,7 +752,7 @@ async fn delete_multi() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_whitespace() -> anyhow::Result<()> {
-    for pair in DEFAULT_PAIRS {
+    for pair in padded_pairs() {
         test((
             format!("{} #[| ]#{}", pair.0, pair.1),
             "i<backspace>",
@@ -734,7 +766,7 @@ async fn delete_whitespace() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_whitespace_after_word() -> anyhow::Result<()> {
-    for pair in DEFAULT_PAIRS {
+    for pair in padded_pairs() {
         test((
             format!("foo{} #[| ]#{}", pair.0, pair.1),
             "i<backspace>",
@@ -748,7 +780,7 @@ async fn delete_whitespace_after_word() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_whitespace_multi() -> anyhow::Result<()> {
-    for pair in DEFAULT_PAIRS {
+    for pair in padded_pairs() {
         test((
             format!(
                 indoc! {"\
@@ -780,7 +812,7 @@ async fn delete_whitespace_multi() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_append_whitespace_multi() -> anyhow::Result<()> {
-    for pair in DEFAULT_PAIRS {
+    for pair in padded_pairs() {
         test((
             format!(
                 indoc! {"\
@@ -803,6 +835,21 @@ async fn delete_append_whitespace_multi() -> anyhow::Result<()> {
                 open = pair.0,
                 close = pair.1,
             ),
+        ))
+        .await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_whitespace_unpadded_pairs() -> anyhow::Result<()> {
+    for pair in unpadded_pairs() {
+        // deleting a space inside an unpadded pair only removes that space
+        test((
+            format!("{} #[| ]#{}", pair.0, pair.1),
+            "i<backspace>",
+            format!("{}#[| ]#{}", pair.0, pair.1),
         ))
         .await?;
     }
