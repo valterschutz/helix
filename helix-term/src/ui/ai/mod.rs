@@ -35,7 +35,7 @@ use self::{
         apply_completion, command_candidates, completion_token, normalize_request,
         reference_candidates, CommandInfo, TokenKind,
     },
-    rpc::{PiSession, SpawnOptions},
+    rpc::{PiProcess, SpawnOptions},
 };
 
 mod request;
@@ -156,7 +156,7 @@ pub struct AiChat {
     original: String,
     proposed: Option<String>,
     cwd: PathBuf,
-    session: Arc<PiSession>,
+    process: Arc<PiProcess>,
     commands: Vec<CommandInfo>,
     workspace_files: Vec<String>,
     activity: Option<String>,
@@ -192,7 +192,7 @@ impl AiChat {
         );
 
         let ai_configuration = load_ai_configuration();
-        let session = PiSession::spawn(SpawnOptions {
+        let process = PiProcess::spawn(SpawnOptions {
             cwd: cwd.clone(),
             agent_dir: pi_agent_dir(),
             system_prompt: system_prompt_for(&original, &language, &file),
@@ -208,7 +208,7 @@ impl AiChat {
             original,
             proposed: None,
             cwd,
-            session,
+            process,
             commands: Vec::new(),
             workspace_files: Vec::new(),
             activity: None,
@@ -231,9 +231,9 @@ impl AiChat {
     /// Fetches pi's command list and walks the workspace for reference
     /// completion. Both arrive later through the job queue.
     pub fn load_resources(&self, editor: &Editor, jobs: &mut Jobs) {
-        let session = Arc::clone(&self.session);
+        let process = Arc::clone(&self.process);
         jobs.callback(async move {
-            let result = session.commands().await;
+            let result = process.commands().await;
             Ok(job::Callback::EditorCompositor(Box::new(
                 move |editor, compositor| {
                     let Some(chat) = compositor.find_id::<AiChat>(ID) else {
@@ -278,7 +278,7 @@ impl AiChat {
             .map(|command| command.name.clone())
             .collect();
         let message = normalize_request(&request, &command_names);
-        let session = Arc::clone(&self.session);
+        let process = Arc::clone(&self.process);
 
         self.phase = Phase::Waiting;
         self.activity = None;
@@ -286,7 +286,7 @@ impl AiChat {
         self.prompt.set_line(String::new(), cx.editor);
 
         cx.jobs.callback(async move {
-            let result = session
+            let result = process
                 .prompt(message, |activity| {
                     tokio::spawn(job::dispatch(move |_, compositor| {
                         if let Some(chat) = compositor.find_id::<AiChat>(ID) {
@@ -337,13 +337,22 @@ impl AiChat {
         let items: Vec<CompletionItem> = match token.kind {
             TokenKind::Reference => {
                 let open_buffers = open_buffer_paths(editor, &self.cwd);
-                reference_candidates(&token.query, &self.workspace_files, &open_buffers)
-                    .into_iter()
-                    .map(|path| CompletionItem {
-                        value: format!("@{path}"),
-                        description: None,
-                    })
-                    .collect()
+                let current_file = editor
+                    .documents
+                    .get(&self.document_id)
+                    .and_then(|document| relative_path(document, &self.cwd));
+                reference_candidates(
+                    &token.query,
+                    &self.workspace_files,
+                    &open_buffers,
+                    current_file.as_deref(),
+                )
+                .into_iter()
+                .map(|path| CompletionItem {
+                    value: format!("@{path}"),
+                    description: None,
+                })
+                .collect()
             }
             TokenKind::Command => command_candidates(&token.query, &self.commands)
                 .into_iter()
@@ -536,12 +545,12 @@ impl AiChat {
 
     /// Pushes the current model and thinking level to the live pi process.
     fn sync_session_preferences(&self, jobs: &mut Jobs) {
-        let session = Arc::clone(&self.session);
+        let process = Arc::clone(&self.process);
         let preferences = self.preferences.clone();
         jobs.callback(async move {
             let result = async {
-                session.set_model(&preferences.model).await?;
-                session
+                process.set_model(&preferences.model).await?;
+                process
                     .set_thinking_level(preferences.thinking.as_str())
                     .await
             }
@@ -684,16 +693,16 @@ impl Component for AiChat {
                 self.completion = None;
                 EventResult::Consumed(None)
             }
-            key!(Tab) | key!(Down) if completing => {
+            key!(Tab) | key!(Enter) if completing => {
+                self.accept_completion(cx.editor);
+                EventResult::Consumed(None)
+            }
+            key!(Down) if completing => {
                 self.move_completion_selection(true);
                 EventResult::Consumed(None)
             }
             shift!(Tab) | key!(Up) if completing => {
                 self.move_completion_selection(false);
-                EventResult::Consumed(None)
-            }
-            key!(Enter) if completing => {
-                self.accept_completion(cx.editor);
                 EventResult::Consumed(None)
             }
             key!(Esc) | ctrl!('c') => Self::close_result(),
@@ -831,7 +840,7 @@ impl Component for AiChat {
 
 impl Drop for AiChat {
     fn drop(&mut self) {
-        self.session.close();
+        self.process.close();
     }
 }
 
@@ -1039,27 +1048,7 @@ fn system_prompt_for(original: &str, language: &str, file: &str) -> String {
 
 /// Workspace files relative to `root`, using the file picker's walker settings.
 fn walk_workspace(root: &Path, config: &FilePickerConfig) -> Vec<String> {
-    use ignore::WalkBuilder;
-
-    let absolute_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let dedup_symlinks = config.deduplicate_links;
-    WalkBuilder::new(root)
-        .hidden(config.hidden)
-        .parents(config.parents)
-        .ignore(config.ignore)
-        .follow_links(config.follow_symlinks)
-        .git_ignore(config.git_ignore)
-        .git_global(config.git_global)
-        .git_exclude(config.git_exclude)
-        .sort_by_file_name(|name1, name2| name1.cmp(name2))
-        .max_depth(config.max_depth)
-        .filter_entry(move |entry| {
-            crate::filter_picker_entry(entry, &absolute_root, dedup_symlinks)
-        })
-        .add_custom_ignore_filename(helix_loader::config_dir().join("ignore"))
-        .add_custom_ignore_filename(".helix/ignore")
-        .types(crate::ui::get_excluded_types())
-        .build()
+    crate::ui::workspace_file_walker(root, config)
         .filter_map(|entry| {
             let entry = entry.ok()?;
             if !entry.path().is_file() {
@@ -1076,9 +1065,13 @@ fn walk_workspace(root: &Path, config: &FilePickerConfig) -> Vec<String> {
 fn open_buffer_paths(editor: &Editor, root: &Path) -> Vec<String> {
     editor
         .documents()
-        .filter_map(|document| document.path()?.strip_prefix(root).ok())
-        .map(|path| path.to_string_lossy().into_owned())
+        .filter_map(|document| relative_path(document, root))
         .collect()
+}
+
+fn relative_path(document: &helix_view::Document, root: &Path) -> Option<String> {
+    let path = document.path()?.strip_prefix(root).ok()?;
+    Some(path.to_string_lossy().into_owned())
 }
 
 fn parse_response(output: &str) -> anyhow::Result<String> {

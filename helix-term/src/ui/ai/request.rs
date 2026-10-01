@@ -22,8 +22,10 @@ pub struct CompletionToken {
 /// whitespace.
 pub fn completion_token(before_cursor: &str) -> Option<CompletionToken> {
     let start = before_cursor
-        .rfind(char::is_whitespace)
-        .map_or(0, |index| index + 1);
+        .char_indices()
+        .rev()
+        .find(|(_, character)| character.is_whitespace())
+        .map_or(0, |(index, character)| index + character.len_utf8());
     let token = &before_cursor[start..];
     let kind = match token.chars().next()? {
         '@' => TokenKind::Reference,
@@ -44,20 +46,31 @@ pub struct CommandInfo {
     pub description: Option<String>,
 }
 
-/// Workspace files matching the query, open buffers first. With an empty query
-/// the files keep their given order within each group.
+/// Workspace files and open buffers matching the query: the current file
+/// first, then other open buffers, then the rest. With an empty query the
+/// files keep their given order within each group.
 pub fn reference_candidates<'a>(
     query: &str,
     files: &'a [String],
-    open_buffers: &[String],
+    open_buffers: &'a [String],
+    current_file: Option<&str>,
 ) -> Vec<&'a str> {
     let is_open = |file: &str| open_buffers.iter().any(|open| open == file);
+    let candidates = files
+        .iter()
+        .chain(open_buffers.iter().filter(|open| !files.contains(open)));
     let mut matched: Vec<(&str, u16)> = if query.is_empty() {
-        files.iter().map(|file| (file.as_str(), 0)).collect()
+        candidates.map(|file| (file.as_str(), 0)).collect()
     } else {
-        helix_core::fuzzy::fuzzy_match(query, files.iter().map(String::as_str), true)
+        helix_core::fuzzy::fuzzy_match(query, candidates.map(String::as_str), true)
     };
-    matched.sort_by_key(|(file, score)| (!is_open(file), std::cmp::Reverse(*score)));
+    matched.sort_by_key(|(file, score)| {
+        (
+            Some(*file) != current_file,
+            !is_open(file),
+            std::cmp::Reverse(*score),
+        )
+    });
     matched.into_iter().map(|(file, _)| file).collect()
 }
 
@@ -153,6 +166,18 @@ mod tests {
     }
 
     #[test]
+    fn tokens_may_follow_multibyte_whitespace() {
+        assert_eq!(
+            completion_token("see\u{a0}@x"),
+            Some(CompletionToken {
+                kind: TokenKind::Reference,
+                start: 5,
+                query: "x".into(),
+            })
+        );
+    }
+
+    #[test]
     fn trailing_command_moves_to_the_front() {
         let commands = vec!["skill:conventions-python".to_owned()];
 
@@ -191,25 +216,36 @@ mod tests {
     }
 
     #[test]
-    fn references_rank_open_buffers_first_and_match_fuzzily() {
+    fn references_rank_current_file_then_open_buffers_and_match_fuzzily() {
         let files = vec![
             "docs/readme.md".to_owned(),
             "src/main.rs".to_owned(),
             "src/ui/menu.rs".to_owned(),
         ];
-        let open = vec!["src/ui/menu.rs".to_owned()];
+        let open = vec!["src/ui/menu.rs".to_owned(), "src/main.rs".to_owned()];
 
         assert_eq!(
-            reference_candidates("", &files, &open),
-            vec!["src/ui/menu.rs", "docs/readme.md", "src/main.rs"]
+            reference_candidates("", &files, &open, Some("src/main.rs")),
+            vec!["src/main.rs", "src/ui/menu.rs", "docs/readme.md"]
         );
         assert_eq!(
-            reference_candidates("mn", &files, &open),
+            reference_candidates("mn", &files, &open, None),
             vec!["src/ui/menu.rs", "src/main.rs"]
         );
         assert_eq!(
-            reference_candidates("zzz", &files, &open),
+            reference_candidates("zzz", &files, &open, None),
             Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn open_buffers_outside_the_walk_are_still_offered() {
+        let files = vec!["src/main.rs".to_owned()];
+        let open = vec!["build/generated.rs".to_owned()];
+
+        assert_eq!(
+            reference_candidates("gen", &files, &open, None),
+            vec!["build/generated.rs"]
         );
     }
 

@@ -52,7 +52,7 @@ pub enum SessionEvent {
     Other,
 }
 
-pub struct PiSession {
+pub struct PiProcess {
     stdin: tokio::sync::Mutex<ChildStdin>,
     child: Mutex<Option<Child>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
@@ -73,7 +73,7 @@ struct RpcCommand {
     source: String,
 }
 
-impl PiSession {
+impl PiProcess {
     /// Starts pi. Must be called from within the tokio runtime.
     pub fn spawn(options: SpawnOptions) -> anyhow::Result<Arc<Self>> {
         let system_prompt_file = write_system_prompt_file(&options.system_prompt)?;
@@ -241,7 +241,7 @@ impl PiSession {
     }
 }
 
-impl Drop for PiSession {
+impl Drop for PiProcess {
     fn drop(&mut self) {
         self.close();
     }
