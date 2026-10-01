@@ -19,3 +19,11 @@ _Avoid_: Enabled model, available model
 **Proposal**:
 The complete replacement snippet returned by pi for review before it is applied.
 _Avoid_: Patch, diff
+
+**Reference**:
+A workspace file named with a leading `@` in a request so that pi reads it while producing the proposal.
+_Avoid_: Mention, attachment, context file
+
+**Command**:
+A pi skill or prompt template named with a leading `/` in a request, expanded by pi before the model sees the request.
+_Avoid_: Slash command, skill call

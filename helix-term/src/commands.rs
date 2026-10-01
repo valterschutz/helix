@@ -754,7 +754,15 @@ fn ai_edit(cx: &mut Context) {
             document.workspace_root().to_path_buf(),
         )
     };
-    cx.push_layer(Box::new(chat));
+    match chat {
+        Ok(chat) => {
+            chat.load_resources(cx.editor, cx.jobs);
+            cx.push_layer(Box::new(chat));
+        }
+        Err(error) => cx
+            .editor
+            .set_error(format!("Could not start pi: {error:#}")),
+    }
 }
 
 type MoveFn =

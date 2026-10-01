@@ -2,8 +2,7 @@ use std::{
     collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
-    process::Stdio,
-    time::Duration,
+    sync::Arc,
 };
 
 use anyhow::{bail, Context as _};
@@ -12,11 +11,11 @@ use helix_core::{
 };
 use helix_view::{
     document::Mode,
+    editor::FilePickerConfig,
     graphics::{CursorKind, Margin, Rect},
     DocumentId, Editor, ViewId,
 };
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
 use tui::{
     buffer::Buffer as Surface,
     text::{Span, Text},
@@ -25,15 +24,29 @@ use tui::{
 
 use crate::{
     compositor::{Component, Compositor, Context, Event, EventResult},
-    ctrl, job, key, shift,
+    ctrl, job,
+    job::Jobs,
+    key, shift,
     ui::{Prompt, PromptEvent},
 };
 
+use self::{
+    request::{
+        apply_completion, command_candidates, completion_token, normalize_request,
+        reference_candidates, CommandInfo, TokenKind,
+    },
+    rpc::{PiSession, SpawnOptions},
+};
+
+mod request;
+mod rpc;
+
 pub const ID: &str = "ai-chat";
 
-const SYSTEM_PROMPT: &str = r#"You are an inline code transformation engine. Respond with exactly one JSON object and no Markdown fences or prose: {"replacement":"the complete replacement snippet"}. The replacement must contain the entire code snippet, including unchanged code. Apply the user's latest request while respecting the prior conversation. Never edit files or return a patch."#;
-const PI_TIMEOUT: Duration = Duration::from_secs(300);
+const SYSTEM_PROMPT: &str = r#"You are an inline code transformation engine working on one selected snippet, given below. Each user request asks for a change to that snippet; later requests refine your previous replacement. Requests may name workspace files with a leading `@` (for example `@src/main.rs`): read those files with the read tool before answering. Respond with exactly one JSON object and no Markdown fences or prose: {"replacement":"the complete replacement snippet"}. The replacement must contain the entire snippet, including unchanged code. Never edit files or return a patch."#;
 const MAX_INPUT_HEIGHT: u16 = 8;
+const MAX_COMPLETION_ROWS: u16 = 8;
+const MAX_WORKSPACE_FILES: usize = 50_000;
 const DEFAULT_THINKING_LEVEL: ThinkingLevel = ThinkingLevel::Medium;
 const ALL_THINKING_LEVELS: [ThinkingLevel; 7] = [
     ThinkingLevel::Off,
@@ -107,22 +120,6 @@ struct AiConfiguration {
     thinking_levels: HashMap<String, Vec<ThinkingLevel>>,
 }
 
-#[derive(Clone, Serialize)]
-struct ConversationTurn {
-    request: String,
-    replacement: String,
-}
-
-#[derive(Serialize)]
-struct RequestContext {
-    original: String,
-    current: String,
-    language: String,
-    file: String,
-    conversation: Vec<ConversationTurn>,
-    request: String,
-}
-
 #[derive(Deserialize)]
 struct PiResponse {
     replacement: String,
@@ -135,6 +132,22 @@ enum Phase {
     Review,
 }
 
+/// One entry offered for the reference or command token under the cursor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CompletionItem {
+    /// Text that replaces the token when accepted, including the sigil.
+    value: String,
+    description: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CompletionMenu {
+    /// Byte offset of the token's sigil in the request.
+    token_start: usize,
+    items: Vec<CompletionItem>,
+    selected: usize,
+}
+
 pub struct AiChat {
     document_id: DocumentId,
     view_id: ViewId,
@@ -142,10 +155,12 @@ pub struct AiChat {
     document_version: i32,
     original: String,
     proposed: Option<String>,
-    language: String,
-    file: String,
     cwd: PathBuf,
-    conversation: Vec<ConversationTurn>,
+    session: Arc<PiSession>,
+    commands: Vec<CommandInfo>,
+    workspace_files: Vec<String>,
+    activity: Option<String>,
+    completion: Option<CompletionMenu>,
     prompt: Prompt,
     phase: Phase,
     preferences: AiPreferences,
@@ -166,7 +181,7 @@ impl AiChat {
         language: String,
         file: String,
         cwd: PathBuf,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         assert!(
             !original.is_empty(),
             "AI edit requires a non-empty selection"
@@ -177,18 +192,27 @@ impl AiChat {
         );
 
         let ai_configuration = load_ai_configuration();
+        let session = PiSession::spawn(SpawnOptions {
+            cwd: cwd.clone(),
+            agent_dir: pi_agent_dir(),
+            system_prompt: system_prompt_for(&original, &language, &file),
+            model: ai_configuration.preferences.model.clone(),
+            thinking: ai_configuration.preferences.thinking.as_str(),
+        })?;
 
-        Self {
+        Ok(Self {
             document_id,
             view_id,
             range,
             document_version,
             original,
             proposed: None,
-            language,
-            file,
             cwd,
-            conversation: Vec::new(),
+            session,
+            commands: Vec::new(),
+            workspace_files: Vec::new(),
+            activity: None,
+            completion: None,
             prompt: Prompt::new(
                 "".into(),
                 None,
@@ -201,7 +225,44 @@ impl AiChat {
             thinking_levels: ai_configuration.thinking_levels,
             scroll: 0,
             prompt_cursor: None,
-        }
+        })
+    }
+
+    /// Fetches pi's command list and walks the workspace for reference
+    /// completion. Both arrive later through the job queue.
+    pub fn load_resources(&self, editor: &Editor, jobs: &mut Jobs) {
+        let session = Arc::clone(&self.session);
+        jobs.callback(async move {
+            let result = session.commands().await;
+            Ok(job::Callback::EditorCompositor(Box::new(
+                move |editor, compositor| {
+                    let Some(chat) = compositor.find_id::<AiChat>(ID) else {
+                        return;
+                    };
+                    match result {
+                        Ok(commands) => chat.commands = commands,
+                        Err(error) => {
+                            editor.set_error(format!("pi commands unavailable: {error:#}"))
+                        }
+                    }
+                },
+            )))
+        });
+
+        let root = self.cwd.clone();
+        let config = editor.config().file_picker.clone();
+        jobs.callback(async move {
+            let files = tokio::task::spawn_blocking(move || walk_workspace(&root, &config))
+                .await
+                .context("workspace walk panicked")?;
+            Ok(job::Callback::EditorCompositor(Box::new(
+                move |_, compositor| {
+                    if let Some(chat) = compositor.find_id::<AiChat>(ID) {
+                        chat.workspace_files = files;
+                    }
+                },
+            )))
+        });
     }
 
     fn submit(&mut self, cx: &mut Context) {
@@ -211,46 +272,45 @@ impl AiChat {
             return;
         }
 
-        let context = RequestContext {
-            original: self.original.clone(),
-            current: self.proposed.as_ref().unwrap_or(&self.original).clone(),
-            language: self.language.clone(),
-            file: self.file.clone(),
-            conversation: self.conversation.clone(),
-            request: request.clone(),
-        };
-        let input = build_request(context);
-        let cwd = self.cwd.clone();
-        let preferences = self.preferences.clone();
+        let command_names: Vec<String> = self
+            .commands
+            .iter()
+            .map(|command| command.name.clone())
+            .collect();
+        let message = normalize_request(&request, &command_names);
+        let session = Arc::clone(&self.session);
 
         self.phase = Phase::Waiting;
+        self.activity = None;
+        self.completion = None;
         self.prompt.set_line(String::new(), cx.editor);
 
         cx.jobs.callback(async move {
-            let result = run_pi(cwd, input, preferences).await;
+            let result = session
+                .prompt(message, |activity| {
+                    tokio::spawn(job::dispatch(move |_, compositor| {
+                        if let Some(chat) = compositor.find_id::<AiChat>(ID) {
+                            chat.activity = Some(activity);
+                        }
+                    }));
+                })
+                .await
+                .and_then(|text| parse_response(&text));
             Ok(job::Callback::EditorCompositor(Box::new(
                 move |editor, compositor| {
                     let Some(chat) = compositor.find_id::<AiChat>(ID) else {
                         return;
                     };
-                    chat.finish_request(request, result, editor);
+                    chat.finish_request(result, editor);
                 },
             )))
         });
     }
 
-    fn finish_request(
-        &mut self,
-        request: String,
-        result: anyhow::Result<String>,
-        editor: &mut Editor,
-    ) {
+    fn finish_request(&mut self, result: anyhow::Result<String>, editor: &mut Editor) {
+        self.activity = None;
         match result {
             Ok(replacement) => {
-                self.conversation.push(ConversationTurn {
-                    request,
-                    replacement: replacement.clone(),
-                });
                 self.proposed = Some(replacement);
                 self.phase = Phase::Review;
                 self.scroll = 0;
@@ -265,6 +325,64 @@ impl AiChat {
                 };
             }
         }
+    }
+
+    /// Recomputes the completion menu for the token under the cursor.
+    fn refresh_completion(&mut self, editor: &Editor) {
+        let before_cursor = &self.prompt.line()[..self.prompt.position()];
+        let Some(token) = completion_token(before_cursor) else {
+            self.completion = None;
+            return;
+        };
+        let items: Vec<CompletionItem> = match token.kind {
+            TokenKind::Reference => {
+                let open_buffers = open_buffer_paths(editor, &self.cwd);
+                reference_candidates(&token.query, &self.workspace_files, &open_buffers)
+                    .into_iter()
+                    .map(|path| CompletionItem {
+                        value: format!("@{path}"),
+                        description: None,
+                    })
+                    .collect()
+            }
+            TokenKind::Command => command_candidates(&token.query, &self.commands)
+                .into_iter()
+                .map(|command| CompletionItem {
+                    value: format!("/{}", command.name),
+                    description: command.description.clone(),
+                })
+                .collect(),
+        };
+        self.completion = (!items.is_empty()).then_some(CompletionMenu {
+            token_start: token.start,
+            items,
+            selected: 0,
+        });
+    }
+
+    fn move_completion_selection(&mut self, forward: bool) {
+        if let Some(menu) = &mut self.completion {
+            let count = menu.items.len();
+            menu.selected = if forward {
+                (menu.selected + 1) % count
+            } else {
+                (menu.selected + count - 1) % count
+            };
+        }
+    }
+
+    /// Replaces the token under the cursor with the selected item and a space.
+    fn accept_completion(&mut self, editor: &Editor) {
+        let Some(menu) = self.completion.take() else {
+            return;
+        };
+        let (line, cursor) = apply_completion(
+            self.prompt.line(),
+            self.prompt.position(),
+            menu.token_start,
+            &menu.items[menu.selected].value,
+        );
+        self.prompt.set_line_with_cursor(line, cursor, editor);
     }
 
     fn apply(&self, editor: &mut Editor) -> anyhow::Result<()> {
@@ -397,7 +515,7 @@ impl AiChat {
             .render(new_inner, surface);
     }
 
-    fn cycle_model(&mut self, editor: &mut Editor) {
+    fn cycle_model(&mut self, editor: &mut Editor, jobs: &mut Jobs) {
         let Some(model) = next_scoped_model(&self.preferences.model, &self.scoped_models) else {
             editor.set_error("Pi has no scoped models configured");
             return;
@@ -406,12 +524,34 @@ impl AiChat {
         let supported = self.supported_thinking_levels();
         self.preferences.thinking = clamp_thinking_level(self.preferences.thinking, supported);
         self.persist_preferences(editor);
+        self.sync_session_preferences(jobs);
     }
 
-    fn cycle_thinking_level(&mut self, editor: &mut Editor) {
+    fn cycle_thinking_level(&mut self, editor: &mut Editor, jobs: &mut Jobs) {
         self.preferences.thinking =
             next_thinking_level(self.preferences.thinking, self.supported_thinking_levels());
         self.persist_preferences(editor);
+        self.sync_session_preferences(jobs);
+    }
+
+    /// Pushes the current model and thinking level to the live pi process.
+    fn sync_session_preferences(&self, jobs: &mut Jobs) {
+        let session = Arc::clone(&self.session);
+        let preferences = self.preferences.clone();
+        jobs.callback(async move {
+            let result = async {
+                session.set_model(&preferences.model).await?;
+                session
+                    .set_thinking_level(preferences.thinking.as_str())
+                    .await
+            }
+            .await;
+            Ok(job::Callback::Editor(Box::new(move |editor| {
+                if let Err(error) = result {
+                    editor.set_error(format!("pi could not switch model: {error:#}"));
+                }
+            })))
+        });
     }
 
     fn supported_thinking_levels(&self) -> &[ThinkingLevel] {
@@ -433,7 +573,89 @@ impl AiChat {
             .model
             .rsplit_once('/')
             .map_or(self.preferences.model.as_str(), |(_, model)| model);
-        format!(" {model} · {} ", self.preferences.thinking.as_str())
+        match &self.activity {
+            Some(activity) if self.phase == Phase::Waiting => {
+                format!(
+                    " {model} · {} · {activity} ",
+                    self.preferences.thinking.as_str()
+                )
+            }
+            _ => format!(" {model} · {} ", self.preferences.thinking.as_str()),
+        }
+    }
+
+    fn render_completion(
+        &self,
+        input_area: Rect,
+        viewport: Rect,
+        surface: &mut Surface,
+        cx: &Context,
+    ) {
+        let Some(menu) = &self.completion else {
+            return;
+        };
+        let rows = (menu.items.len() as u16).min(MAX_COMPLETION_ROWS);
+        let below = input_area.bottom().saturating_add(1);
+        let y = if below.saturating_add(rows) <= viewport.bottom() {
+            below
+        } else {
+            input_area.y.saturating_sub(rows + 1)
+        };
+        let area = Rect::new(
+            input_area.x.saturating_sub(1),
+            y,
+            input_area.width + 2,
+            rows,
+        )
+        .intersection(viewport);
+        if area.area() == 0 {
+            return;
+        }
+
+        let theme = &cx.editor.theme;
+        let menu_style = theme.get("ui.menu");
+        let selected_style = theme.get("ui.menu.selected");
+        let description_style = theme.get("ui.text.inactive");
+        surface.clear_with(area, menu_style);
+
+        let offset = menu.selected.saturating_sub(rows as usize - 1);
+        for (row, (index, item)) in menu
+            .items
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(rows as usize)
+            .enumerate()
+        {
+            let y = area.y + row as u16;
+            let style = if index == menu.selected {
+                selected_style
+            } else {
+                menu_style
+            };
+            if index == menu.selected {
+                surface.set_style(Rect::new(area.x, y, area.width, 1), style);
+            }
+            let (end, _) = surface.set_stringn(
+                area.x + 1,
+                y,
+                &item.value,
+                area.width.saturating_sub(2) as usize,
+                style,
+            );
+            if let Some(description) = &item.description {
+                let x = end + 2;
+                if x < area.right() {
+                    surface.set_stringn(
+                        x,
+                        y,
+                        description,
+                        (area.right() - x) as usize,
+                        style.patch(description_style),
+                    );
+                }
+            }
+        }
     }
 
     fn close_result() -> EventResult {
@@ -448,13 +670,32 @@ impl Component for AiChat {
         let key = match event {
             Event::Key(key) => *key,
             Event::Paste(_) if self.phase != Phase::Waiting => {
-                return self.prompt.handle_event(event, cx)
+                let result = self.prompt.handle_event(event, cx);
+                self.refresh_completion(cx.editor);
+                return result;
             }
             Event::Resize(..) | Event::Mouse(_) => return EventResult::Consumed(None),
             _ => return EventResult::Consumed(None),
         };
 
+        let completing = self.completion.is_some() && self.phase != Phase::Waiting;
         match key {
+            key!(Esc) if completing => {
+                self.completion = None;
+                EventResult::Consumed(None)
+            }
+            key!(Tab) | key!(Down) if completing => {
+                self.move_completion_selection(true);
+                EventResult::Consumed(None)
+            }
+            shift!(Tab) | key!(Up) if completing => {
+                self.move_completion_selection(false);
+                EventResult::Consumed(None)
+            }
+            key!(Enter) if completing => {
+                self.accept_completion(cx.editor);
+                EventResult::Consumed(None)
+            }
             key!(Esc) | ctrl!('c') => Self::close_result(),
             ctrl!('s') if self.phase == Phase::Review => match self.apply(cx.editor) {
                 Ok(()) => {
@@ -471,15 +712,16 @@ impl Component for AiChat {
                 EventResult::Consumed(None)
             }
             key!(Tab) if self.phase != Phase::Waiting => {
-                self.cycle_model(cx.editor);
+                self.cycle_model(cx.editor, cx.jobs);
                 EventResult::Consumed(None)
             }
             shift!(Tab) if self.phase != Phase::Waiting => {
-                self.cycle_thinking_level(cx.editor);
+                self.cycle_thinking_level(cx.editor, cx.jobs);
                 EventResult::Consumed(None)
             }
             shift!(Enter) if self.phase != Phase::Waiting => {
                 self.prompt.insert_str("\n", cx.editor);
+                self.refresh_completion(cx.editor);
                 EventResult::Consumed(None)
             }
             key!(Enter) if self.phase != Phase::Waiting => {
@@ -495,7 +737,11 @@ impl Component for AiChat {
                 EventResult::Consumed(None)
             }
             _ if self.phase == Phase::Waiting => EventResult::Consumed(None),
-            _ => self.prompt.handle_event(event, cx),
+            _ => {
+                let result = self.prompt.handle_event(event, cx);
+                self.refresh_completion(cx.editor);
+                result
+            }
         }
     }
 
@@ -560,8 +806,10 @@ impl Component for AiChat {
             let input_area = prompt_block.inner(prompt_area).inner(Margin::horizontal(1));
             prompt_block.render(prompt_area, surface);
             self.render_input(input_area, surface, cx);
+            self.render_completion(input_area, viewport, surface, cx);
         } else {
             self.render_input(inner, surface, cx);
+            self.render_completion(inner, viewport, surface, cx);
         }
     }
 
@@ -578,6 +826,12 @@ impl Component for AiChat {
 
     fn id(&self) -> Option<&'static str> {
         Some(ID)
+    }
+}
+
+impl Drop for AiChat {
+    fn drop(&mut self) {
+        self.session.close();
     }
 }
 
@@ -777,8 +1031,54 @@ fn required_dimensions(
     (viewport.0.min(72), viewport.1.min(height))
 }
 
-fn build_request(context: RequestContext) -> String {
-    serde_json::to_string(&context).expect("serializing an AI edit request cannot fail")
+fn system_prompt_for(original: &str, language: &str, file: &str) -> String {
+    format!(
+        "{SYSTEM_PROMPT}\n\n<context>\nFile: {file}\nLanguage: {language}\n<snippet>\n{original}\n</snippet>\n</context>\n"
+    )
+}
+
+/// Workspace files relative to `root`, using the file picker's walker settings.
+fn walk_workspace(root: &Path, config: &FilePickerConfig) -> Vec<String> {
+    use ignore::WalkBuilder;
+
+    let absolute_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let dedup_symlinks = config.deduplicate_links;
+    WalkBuilder::new(root)
+        .hidden(config.hidden)
+        .parents(config.parents)
+        .ignore(config.ignore)
+        .follow_links(config.follow_symlinks)
+        .git_ignore(config.git_ignore)
+        .git_global(config.git_global)
+        .git_exclude(config.git_exclude)
+        .sort_by_file_name(|name1, name2| name1.cmp(name2))
+        .max_depth(config.max_depth)
+        .filter_entry(move |entry| {
+            crate::filter_picker_entry(entry, &absolute_root, dedup_symlinks)
+        })
+        .add_custom_ignore_filename(helix_loader::config_dir().join("ignore"))
+        .add_custom_ignore_filename(".helix/ignore")
+        .types(crate::ui::get_excluded_types())
+        .build()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if !entry.path().is_file() {
+                return None;
+            }
+            let relative = entry.path().strip_prefix(root).ok()?;
+            Some(relative.to_string_lossy().into_owned())
+        })
+        .take(MAX_WORKSPACE_FILES)
+        .collect()
+}
+
+/// Paths of open buffers inside the workspace, relative to `root`.
+fn open_buffer_paths(editor: &Editor, root: &Path) -> Vec<String> {
+    editor
+        .documents()
+        .filter_map(|document| document.path()?.strip_prefix(root).ok())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
 }
 
 fn parse_response(output: &str) -> anyhow::Result<String> {
@@ -794,58 +1094,12 @@ fn parse_response(output: &str) -> anyhow::Result<String> {
     Ok(response.replacement)
 }
 
-async fn run_pi(cwd: PathBuf, input: String, preferences: AiPreferences) -> anyhow::Result<String> {
-    let mut command = Command::new("pi");
-    command.current_dir(cwd).args([
-        "--print",
-        "--no-session",
-        "--no-tools",
-        "--no-extensions",
-        "--no-skills",
-        "--no-prompt-templates",
-        "--no-context-files",
-        "--system-prompt",
-        SYSTEM_PROMPT,
-    ]);
-    if !preferences.model.is_empty() {
-        command.args(["--model", &preferences.model]);
-    }
-    command
-        .args(["--thinking", preferences.thinking.as_str()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-
-    let mut child = command.spawn().context("could not start `pi`")?;
-    let mut stdin = child.stdin.take().expect("pi stdin must be piped");
-    stdin
-        .write_all(input.as_bytes())
-        .await
-        .context("could not send the request to pi")?;
-    drop(stdin);
-
-    let output = timeout(PI_TIMEOUT, child.wait_with_output())
-        .await
-        .context("pi did not respond within five minutes")??;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        if stderr.is_empty() {
-            bail!("pi exited with {}", output.status);
-        }
-        bail!("pi exited with {}: {stderr}", output.status);
-    }
-
-    let stdout = String::from_utf8(output.stdout).context("pi returned non-UTF-8 output")?;
-    parse_response(&stdout)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        build_request, next_scoped_model, next_thinking_level, parse_response,
-        position_near_selection, reconcile_preferences, required_dimensions, AiPreferences,
-        ConversationTurn, Phase, RequestContext, ThinkingLevel,
+        next_scoped_model, next_thinking_level, parse_response, position_near_selection,
+        reconcile_preferences, required_dimensions, system_prompt_for, AiPreferences, Phase,
+        ThinkingLevel,
     };
     use helix_core::Position;
     use helix_view::graphics::Rect;
@@ -987,26 +1241,12 @@ mod tests {
     }
 
     #[test]
-    fn request_contains_context_and_conversation() {
-        let context = RequestContext {
-            original: "let value = 1;".into(),
-            current: "let value = 2;".into(),
-            language: "rust".into(),
-            file: "src/main.rs".into(),
-            conversation: vec![ConversationTurn {
-                request: "Increment the value".into(),
-                replacement: "let value = 2;".into(),
-            }],
-            request: "Use a descriptive name".into(),
-        };
+    fn system_prompt_carries_the_snippet_and_its_origin() {
+        let prompt = system_prompt_for("let value = 1;", "rust", "src/main.rs");
 
-        let request: serde_json::Value = serde_json::from_str(&build_request(context)).unwrap();
-
-        assert_eq!(request["original"], "let value = 1;");
-        assert_eq!(request["current"], "let value = 2;");
-        assert_eq!(request["language"], "rust");
-        assert_eq!(request["file"], "src/main.rs");
-        assert_eq!(request["conversation"][0]["request"], "Increment the value");
-        assert_eq!(request["request"], "Use a descriptive name");
+        assert!(prompt.contains("<snippet>\nlet value = 1;\n</snippet>"));
+        assert!(prompt.contains("File: src/main.rs"));
+        assert!(prompt.contains("Language: rust"));
+        assert!(prompt.contains("leading `@`"));
     }
 }

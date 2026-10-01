@@ -119,6 +119,16 @@ impl Prompt {
 
     pub fn set_line(&mut self, line: String, editor: &Editor) {
         let cursor = line.len();
+        self.set_line_with_cursor(line, cursor, editor);
+    }
+
+    /// Replaces the line and places the cursor at `cursor`, a byte offset that
+    /// must lie on a character boundary of `line`.
+    pub fn set_line_with_cursor(&mut self, line: String, cursor: usize, editor: &Editor) {
+        assert!(
+            line.is_char_boundary(cursor),
+            "prompt cursor must lie on a character boundary"
+        );
         self.line = line;
         self.cursor = cursor;
         self.recalculate_completion(editor);
