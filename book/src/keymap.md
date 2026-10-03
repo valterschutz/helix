@@ -139,9 +139,11 @@ Normal mode is the default mode when you launch helix. You can return to it from
 | `x`                      | Select current line, if already selected, extend to next line; `Nx` extends to the line `N` below the cursor | `extend_line_below`                  |
 | `X`                      | Select current line, if already selected, extend to previous line; `NX` extends to the line `N` above the cursor | `extend_line_above`                  |
 | `Alt-x`                  | Shrink selection to line bounds (line-wise selection)             | `shrink_to_line_bounds`              |
-| `J`                      | Join lines inside selection                                       | `join_selections`                    |
+| `J`                      | Move selected lines down                                          | `move_lines_down`                    |
+| `K`                      | Move selected lines up                                            | `move_lines_up`                      |
+| `Ctrl-j`                 | Join lines inside selection                                       | `join_selections`                    |
 | `Alt-J`                  | Join lines inside selection and select the inserted space         | `join_selections_space`              |
-| `K`                      | Keep selections matching the regex                                | `keep_selections`                    |
+| `Ctrl-k`                 | Keep selections matching the regex                                | `keep_selections`                    |
 | `Alt-K`                  | Remove selections matching the regex                              | `remove_selections`                  |
 | `Ctrl-c`                 | Comment/uncomment the selections                                  | `toggle_comments`                    |
 | `Alt-o`, `Alt-up`        | Expand selection to parent syntax node (**TS**)                   | `expand_selection`                   |

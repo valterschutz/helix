@@ -511,6 +511,8 @@ impl MappableCommand {
         format_selections, "Format selection",
         join_selections, "Join lines inside selection",
         join_selections_space, "Join lines inside selection and select spaces",
+        move_lines_down, "Move selected lines down",
+        move_lines_up, "Move selected lines up",
         keep_selections, "Keep selections matching regex",
         remove_selections, "Remove selections matching regex",
         align_selections, "Align selections in column",
@@ -5519,6 +5521,135 @@ fn join_selections(cx: &mut Context) {
 
 fn join_selections_space(cx: &mut Context) {
     join_selections_impl(cx, true)
+}
+
+fn move_lines_impl(cx: &mut Context, direction: Direction) {
+    let count = cx.count();
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text();
+    let slice = text.slice(..);
+    let selection = doc.selection(view.id);
+
+    // The empty line after a trailing line ending is not a line that can be moved.
+    let mut last_line = text.len_lines() - 1;
+    if last_line > 0 && slice.line(last_line).len_chars() == 0 {
+        last_line -= 1;
+    }
+    let blocks: Vec<(usize, usize)> = selection
+        .line_ranges(slice)
+        .map(|(start, end)| (start.min(last_line), end.min(last_line)))
+        .collect();
+    let (Some(first), Some(last)) = (blocks.first(), blocks.last()) else {
+        return;
+    };
+
+    // Every block moves by the same distance, limited by the block nearest the edge.
+    let room = match direction {
+        Direction::Forward => last_line - last.1,
+        Direction::Backward => first.0,
+    };
+    let distance = count.min(room);
+    if distance == 0 {
+        return;
+    }
+    let (span_start, span_end) = match direction {
+        Direction::Forward => (first.0, last.1 + distance),
+        Direction::Backward => (first.0 - distance, last.1),
+    };
+    let new_line = |line: usize| match direction {
+        Direction::Forward => line + distance,
+        Direction::Backward => line - distance,
+    };
+
+    // Place the block lines at their destinations and fill the remaining slots with the
+    // other lines of the span in their original order.
+    let mut order: Vec<Option<usize>> = vec![None; span_end - span_start + 1];
+    for &(start, end) in &blocks {
+        for line in start..=end {
+            order[new_line(line) - span_start] = Some(line);
+        }
+    }
+    let mut displaced = (span_start..=span_end).filter(|line| {
+        !blocks
+            .iter()
+            .any(|&(start, end)| (start..=end).contains(line))
+    });
+    let order: Vec<usize> = order
+        .into_iter()
+        .map(|line| line.or_else(|| displaced.next()).unwrap())
+        .collect();
+
+    // Give every line a line ending so they can be reordered freely, then drop the ending
+    // again from the end of the span if the document did not have one there.
+    let line_ending = doc.line_ending.as_str();
+    let has_final_line_ending = span_end < text.len_lines() - 1
+        && line_end_char_index(&slice, span_end) < text.line_to_char(span_end + 1);
+    let line_text = |line: usize| {
+        let mut line_text = String::from(slice.line(line));
+        if get_line_ending_of_str(&line_text).is_none() {
+            line_text.push_str(line_ending);
+        }
+        line_text
+    };
+    let mut replacement = String::new();
+    let mut new_line_starts = HashMap::new();
+    for (index, &line) in order.iter().enumerate() {
+        new_line_starts.insert(
+            line,
+            text.line_to_char(span_start) + replacement.chars().count(),
+        );
+        if index + 1 == order.len() && !has_final_line_ending {
+            let line_text = line_text(line);
+            let ending_len =
+                get_line_ending_of_str(&line_text).map_or(0, |ending| ending.as_str().len());
+            replacement.push_str(&line_text[..line_text.len() - ending_len]);
+        } else {
+            replacement.push_str(&line_text(line));
+        }
+    }
+    let span_end_char = if has_final_line_ending {
+        text.line_to_char(span_end + 1)
+    } else {
+        text.len_chars()
+    };
+    let new_len = text.len_chars() - (span_end_char - text.line_to_char(span_start))
+        + replacement.chars().count();
+
+    // Every range keeps its offset from the start of its block.
+    let map_pos = |pos: usize, block_start: usize| {
+        let offset = pos - text.line_to_char(block_start);
+        (new_line_starts[&block_start] + offset).min(new_len)
+    };
+    let new_selection = selection.clone().transform(|range| {
+        let line = range.line_range(slice).0.min(last_line);
+        let (block_start, _) = *blocks
+            .iter()
+            .find(|&&(start, end)| (start..=end).contains(&line))
+            .unwrap();
+        Range::new(
+            map_pos(range.anchor, block_start),
+            map_pos(range.head, block_start),
+        )
+    });
+
+    let transaction = Transaction::change(
+        text,
+        std::iter::once((
+            text.line_to_char(span_start),
+            span_end_char,
+            Some(replacement.into()),
+        )),
+    )
+    .with_selection(new_selection);
+    doc.apply(&transaction, view.id);
+}
+
+fn move_lines_down(cx: &mut Context) {
+    move_lines_impl(cx, Direction::Forward)
+}
+
+fn move_lines_up(cx: &mut Context) {
+    move_lines_impl(cx, Direction::Backward)
 }
 
 fn keep_selections(cx: &mut Context) {

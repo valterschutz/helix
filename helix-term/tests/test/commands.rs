@@ -3,6 +3,7 @@ use helix_term::application::Application;
 use super::*;
 
 mod insert;
+mod move_lines;
 mod movement;
 mod reverse_selection_contents;
 mod rotate_selection_contents;
@@ -665,7 +666,7 @@ async fn test_join_selections() -> anyhow::Result<()> {
             #[a|]#bc
             def
         "},
-        "J",
+        "<C-j>",
         indoc! {"\
             #[a|]#bc def
         "},
@@ -679,7 +680,7 @@ async fn test_join_selections() -> anyhow::Result<()> {
 
             def
         "},
-        "JJ",
+        "<C-j><C-j>",
         indoc! {"\
             #[a|]#bc def
         "},
@@ -693,7 +694,7 @@ async fn test_join_selections() -> anyhow::Result<()> {
 
                 def
         "},
-        "JJ",
+        "<C-j><C-j>",
         indoc! {"\
             #[a|]#bc def
         "},
@@ -793,7 +794,7 @@ async fn test_join_selections_comment() -> anyhow::Result<()> {
             /// #[a|]#bc
             /// def
         "},
-        ":lang rust<ret>J",
+        ":lang rust<ret><C-j>",
         indoc! {"\
             /// #[a|]#bc def
         "},
@@ -811,7 +812,7 @@ async fn test_join_selections_comment() -> anyhow::Result<()> {
             /// f
             // g]#
         "},
-        ":lang rust<ret>J",
+        ":lang rust<ret><C-j>",
         indoc! {"\
             #[| // a b /// c d e f // g]#
         "},
@@ -821,7 +822,7 @@ async fn test_join_selections_comment() -> anyhow::Result<()> {
     test((
         "#[|\t// Join comments
 \t// with indent]#",
-        ":lang go<ret>J",
+        ":lang go<ret><C-j>",
         "#[|\t// Join comments with indent]#",
     ))
     .await?;
