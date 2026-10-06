@@ -4542,6 +4542,60 @@ pub mod insert {
         });
     }
 
+    // Return the indentation and whether a real Markdown task is empty, not task-like
+    // text inside a fenced code block. Keep this independent of comment continuation.
+    fn markdown_task(doc: &Document, line_start: usize, pos: usize) -> Option<(String, bool)> {
+        if doc.language_name() != Some("markdown") {
+            return None;
+        }
+        let text = doc.text().slice(..);
+        let line = text.line(text.char_to_line(pos)).to_string();
+        let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+        let rest = &line[indent_len..];
+        let marker_len =
+            if rest.starts_with("- ") || rest.starts_with("+ ") || rest.starts_with("* ") {
+                2
+            } else {
+                return None;
+            };
+        let task = &rest[marker_len..];
+        if !(task.starts_with("[ ]") || task.starts_with("[x]") || task.starts_with("[X]"))
+            || (!task[3..].is_empty() && !task[3..].starts_with([' ', '\t', '\r', '\n']))
+        {
+            return None;
+        }
+        let prefix_len = indent_len + marker_len + 3;
+        if pos < line_start + line[..prefix_len].chars().count() {
+            return None;
+        }
+        let byte = text.char_to_byte(line_start) + indent_len + marker_len;
+        let mut node = doc
+            .syntax()?
+            .tree()
+            .root_node()
+            .descendant_for_byte_range(byte as u32, (byte + 3) as u32)?;
+        let empty = task[3..].trim().is_empty();
+        if !matches!(
+            node.kind(),
+            "task_list_marker_checked" | "task_list_marker_unchecked"
+        ) {
+            // The grammar treats an empty checkbox as ordinary list content.
+            if !empty {
+                return None;
+            }
+            loop {
+                if matches!(node.kind(), "fenced_code_block" | "indented_code_block") {
+                    return None;
+                }
+                if node.kind() == "list_item" {
+                    break;
+                }
+                node = node.parent()?;
+            }
+        }
+        Some((line[..indent_len].to_owned(), empty))
+    }
+
     pub fn insert_newline(cx: &mut Context) {
         let config = cx.editor.config();
         let (view, doc) = current_ref!(cx.editor);
@@ -4572,6 +4626,7 @@ pub mod insert {
 
             let current_line = text.char_to_line(pos);
             let line_start = text.line_to_char(current_line);
+            let task = markdown_task(doc, line_start, pos);
 
             // Continue the comment leader using the comment tokens of the layer at the comment
             // leader (i.e. the first non-whitespace char on the line). Looking up at the cursor
@@ -4588,9 +4643,30 @@ pub mod insert {
                 None
             };
 
-            let (from, to, local_offs) = if let Some(idx) =
-                text.slice(line_start..pos).last_non_whitespace_char()
-            {
+            let (from, to, local_offs) = if let Some((indent, empty)) = task {
+                let indent_chars = indent.chars().count();
+                let from = if empty {
+                    (line_start + indent_chars).max(last_pos)
+                } else {
+                    text.slice(line_start..pos)
+                        .last_non_whitespace_char()
+                        .map_or(pos, |idx| (line_start + idx + 1).max(last_pos))
+                };
+                last_pos = pos;
+                new_text.push_str(line_ending);
+                new_text.push_str(&indent);
+                if !empty {
+                    let bullet = text.char(line_start + indent_chars);
+                    new_text.push(bullet);
+                    new_text.push_str(" [ ] ");
+                }
+                chars_deleted = pos - from;
+                (
+                    from,
+                    pos,
+                    new_text.chars().count() as isize - chars_deleted as isize,
+                )
+            } else if let Some(idx) = text.slice(line_start..pos).last_non_whitespace_char() {
                 let first_trailing_whitespace_char = (line_start + idx + 1).clamp(last_pos, pos);
                 last_pos = pos;
                 let line = text.line(current_line);

@@ -10,6 +10,12 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
   statusline counts. Diagnostics continue updating while hidden; LSP completion,
   navigation, and explicit diagnostic pickers are unaffected.
 
+## Markdown task continuation
+
+- Enter in a Markdown task creates an unchecked task using the same bullet and
+  indentation, including when splitting task text. Enter on an empty task removes
+  its marker to end the list. Fenced code and other languages are unaffected.
+
 ## 2026-09-30
 
 - Keymap entries in `config.toml` can now carry a `desc` that overrides the
