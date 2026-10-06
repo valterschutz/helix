@@ -630,6 +630,9 @@ pub struct LspConfig {
     pub auto_signature_help: bool,
     /// Display docs under signature help popup
     pub display_signature_help_docs: bool,
+    /// Display diagnostic highlights, gutter markers, messages and statusline counts.
+    /// Diagnostics are still collected while hidden.
+    pub display_diagnostics: bool,
     /// Display inlay hints
     pub display_inlay_hints: bool,
     /// Automatically highlight symbol references at the cursor.
@@ -651,6 +654,7 @@ impl Default for LspConfig {
             enable: true,
             display_progress_messages: false,
             display_messages: true,
+            display_diagnostics: true,
             auto_signature_help: true,
             display_signature_help_docs: true,
             display_inlay_hints: false,

@@ -509,6 +509,10 @@ impl View {
             }
         }
 
+        if !config.lsp.display_diagnostics {
+            return text_annotations;
+        }
+
         let width = self.inner_width(doc);
         let enable_cursor_line = self
             .diagnostics_handler

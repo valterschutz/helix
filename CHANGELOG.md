@@ -3,6 +3,13 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## Diagnostic display toggle
+
+- `:toggle lsp.display-diagnostics` hides/restores diagnostic underlines and
+  tags, gutter markers, inline/end-of-line/cursor messages, and document/workspace
+  statusline counts. Diagnostics continue updating while hidden; LSP completion,
+  navigation, and explicit diagnostic pickers are unaffected.
+
 ## 2026-09-30
 
 - Keymap entries in `config.toml` can now carry a `desc` that overrides the

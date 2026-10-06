@@ -59,10 +59,11 @@ pub fn diagnostic<'doc>(
     let info = theme.get("info");
     let hint = theme.get("hint");
     let diagnostics = &doc.diagnostics;
+    let display_diagnostics = doc.config.load().lsp.display_diagnostics;
 
     Box::new(
         move |line: usize, _selected: bool, first_visual_line: bool, out: &mut String| {
-            if !first_visual_line {
+            if !display_diagnostics || !first_visual_line {
                 return None;
             }
             use helix_core::diagnostic::Severity;
