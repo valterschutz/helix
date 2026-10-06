@@ -185,6 +185,63 @@ async fn insert_newline_trim_whitespace_to_previous_selection() -> anyhow::Resul
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn insert_newline_markdown_bullets() -> anyhow::Result<()> {
+    for bullet in ['-', '+', '*'] {
+        test((
+            format!("{bullet} First#[|\n]#"),
+            ":lang markdown<ret>i<ret>",
+            format!("{bullet} First\n{bullet} #[|\n]#"),
+        ))
+        .await?;
+    }
+    for (initial, keys, expected) in [
+        (
+            "- Parent\n  - Child#[|\n]#",
+            ":lang markdown<ret>i<ret>",
+            "- Parent\n  - Child\n  - #[|\n]#",
+        ),
+        (
+            "- First #[|s]#econd\n",
+            ":lang markdown<ret>i<ret>",
+            "- First\n- #[|s]#econd\n",
+        ),
+        (
+            "- First#[|\n]#",
+            ":lang markdown<ret>i<ret><ret>",
+            "- First\n\n#[|\n]#",
+        ),
+        (
+            "```\n- First#[|\n]#```\n",
+            ":lang markdown<ret>i<ret>",
+            "```\n- First\n#[|\n]#```\n",
+        ),
+        (
+            "- - -#[|\n]#",
+            ":lang markdown<ret>i<ret>",
+            "- - -\n#[|\n]#",
+        ),
+        (
+            "- First#[|\n]#",
+            ":lang text<ret>i<ret>",
+            "- First\n#[|\n]#",
+        ),
+        (
+            "#[|-]# First\n",
+            ":lang markdown<ret>i<ret>",
+            "\n#[|-]# First\n",
+        ),
+        (
+            "- First#[|\n]#- Second#(|\n)#",
+            ":lang markdown<ret>i<ret>",
+            "- First\n- #[|\n]#- Second\n- #(|\n)#",
+        ),
+    ] {
+        test((initial, keys, expected)).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn insert_newline_markdown_tasks() -> anyhow::Result<()> {
     for bullet in ['-', '+', '*'] {
         for check in [' ', 'x', 'X'] {

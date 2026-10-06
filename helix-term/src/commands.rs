@@ -4542,9 +4542,13 @@ pub mod insert {
         });
     }
 
-    // Return the indentation and whether a real Markdown task is empty, not task-like
-    // text inside a fenced code block. Keep this independent of comment continuation.
-    fn markdown_task(doc: &Document, line_start: usize, pos: usize) -> Option<(String, bool)> {
+    // Continue actual Markdown list items, not list-like text in code blocks or
+    // thematic breaks. Keep this independent of comment continuation.
+    fn markdown_list_item(
+        doc: &Document,
+        line_start: usize,
+        pos: usize,
+    ) -> Option<(String, String, bool)> {
         if doc.language_name() != Some("markdown") {
             return None;
         }
@@ -4558,42 +4562,39 @@ pub mod insert {
             } else {
                 return None;
             };
-        let task = &rest[marker_len..];
-        if !(task.starts_with("[ ]") || task.starts_with("[x]") || task.starts_with("[X]"))
-            || (!task[3..].is_empty() && !task[3..].starts_with([' ', '\t', '\r', '\n']))
-        {
-            return None;
-        }
-        let prefix_len = indent_len + marker_len + 3;
+        let content = &rest[marker_len..];
+        let is_task = (content.starts_with("[ ]")
+            || content.starts_with("[x]")
+            || content.starts_with("[X]"))
+            && (content[3..].is_empty() || content[3..].starts_with([' ', '\t', '\r', '\n']));
+        let prefix_len = indent_len + marker_len + if is_task { 3 } else { 0 };
         if pos < line_start + line[..prefix_len].chars().count() {
             return None;
         }
-        let byte = text.char_to_byte(line_start) + indent_len + marker_len;
+        let byte = text.char_to_byte(line_start) + indent_len;
         let mut node = doc
             .syntax()?
             .tree()
             .root_node()
-            .descendant_for_byte_range(byte as u32, (byte + 3) as u32)?;
-        let empty = task[3..].trim().is_empty();
-        if !matches!(
-            node.kind(),
-            "task_list_marker_checked" | "task_list_marker_unchecked"
-        ) {
-            // The grammar treats an empty checkbox as ordinary list content.
-            if !empty {
+            .descendant_for_byte_range(byte as u32, (byte + 1) as u32)?;
+        loop {
+            if matches!(node.kind(), "fenced_code_block" | "indented_code_block") {
                 return None;
             }
-            loop {
-                if matches!(node.kind(), "fenced_code_block" | "indented_code_block") {
-                    return None;
-                }
-                if node.kind() == "list_item" {
-                    break;
-                }
-                node = node.parent()?;
+            if node.kind() == "list_item" {
+                break;
             }
+            node = node.parent()?;
         }
-        Some((line[..indent_len].to_owned(), empty))
+        let empty = if is_task { &content[3..] } else { content }
+            .trim()
+            .is_empty();
+        let leader = format!(
+            "{}{}",
+            &rest[..marker_len],
+            if is_task { "[ ] " } else { "" }
+        );
+        Some((line[..indent_len].to_owned(), leader, empty))
     }
 
     pub fn insert_newline(cx: &mut Context) {
@@ -4626,7 +4627,7 @@ pub mod insert {
 
             let current_line = text.char_to_line(pos);
             let line_start = text.line_to_char(current_line);
-            let task = markdown_task(doc, line_start, pos);
+            let list_item = markdown_list_item(doc, line_start, pos);
 
             // Continue the comment leader using the comment tokens of the layer at the comment
             // leader (i.e. the first non-whitespace char on the line). Looking up at the cursor
@@ -4643,7 +4644,7 @@ pub mod insert {
                 None
             };
 
-            let (from, to, local_offs) = if let Some((indent, empty)) = task {
+            let (from, to, local_offs) = if let Some((indent, leader, empty)) = list_item {
                 let indent_chars = indent.chars().count();
                 let from = if empty {
                     (line_start + indent_chars).max(last_pos)
@@ -4656,9 +4657,7 @@ pub mod insert {
                 new_text.push_str(line_ending);
                 new_text.push_str(&indent);
                 if !empty {
-                    let bullet = text.char(line_start + indent_chars);
-                    new_text.push(bullet);
-                    new_text.push_str(" [ ] ");
+                    new_text.push_str(&leader);
                 }
                 chars_deleted = pos - from;
                 (
