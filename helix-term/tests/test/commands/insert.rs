@@ -185,6 +185,63 @@ async fn insert_newline_trim_whitespace_to_previous_selection() -> anyhow::Resul
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn insert_newline_markdown_tasks() -> anyhow::Result<()> {
+    for bullet in ['-', '+', '*'] {
+        for check in [' ', 'x', 'X'] {
+            test((
+                format!("{bullet} [{check}] Task#[|\n]#"),
+                ":lang markdown<ret>i<ret>",
+                format!("{bullet} [{check}] Task\n{bullet} [ ] #[|\n]#"),
+            ))
+            .await?;
+        }
+    }
+    test((
+        "- [ ] Parent\n  - [x] Child#[|\n]#",
+        ":lang markdown<ret>i<ret>",
+        "- [ ] Parent\n  - [x] Child\n  - [ ] #[|\n]#",
+    ))
+    .await?;
+    test((
+        "- [ ] First #[|s]#econd\n",
+        ":lang markdown<ret>i<ret>",
+        "- [ ] First\n- [ ] #[|s]#econd\n",
+    ))
+    .await?;
+    test((
+        "- [ ] Task#[|\n]#",
+        ":lang markdown<ret>i<ret><ret>",
+        "- [ ] Task\n\n#[|\n]#",
+    ))
+    .await?;
+    test((
+        "```\n- [ ] Task#[|\n]#```\n",
+        ":lang markdown<ret>i<ret>",
+        "```\n- [ ] Task\n#[|\n]#```\n",
+    ))
+    .await?;
+    test((
+        "- [ ] First#[|\n]#- [x] Second#(|\n)#",
+        ":lang markdown<ret>i<ret>",
+        "- [ ] First\n- [ ] #[|\n]#- [x] Second\n- [ ] #(|\n)#",
+    ))
+    .await?;
+    test((
+        "#[|-]# [ ] Task\n",
+        ":lang markdown<ret>i<ret>",
+        "\n#[|-]# [ ] Task\n",
+    ))
+    .await?;
+    test((
+        "- [ ] Task#[|\n]#",
+        ":lang text<ret>i<ret>",
+        "- [ ] Task\n#[|\n]#",
+    ))
+    .await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn insert_newline_continue_line_comment() -> anyhow::Result<()> {
     // `insert_newline` continues a single line comment
     test((

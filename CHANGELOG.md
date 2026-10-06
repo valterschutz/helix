@@ -3,6 +3,12 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## Markdown task continuation
+
+- Enter in a Markdown task creates an unchecked task using the same bullet and
+  indentation, including when splitting task text. Enter on an empty task removes
+  its marker to end the list. Fenced code and other languages are unaffected.
+
 ## 2026-09-30
 
 - Keymap entries in `config.toml` can now carry a `desc` that overrides the
