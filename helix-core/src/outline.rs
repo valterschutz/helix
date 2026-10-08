@@ -868,4 +868,49 @@ mod test {
             "}
         );
     }
+
+    #[test]
+    fn typst_comments_without_the_marker_first_on_one_line_are_not_summaries() {
+        let (_, outline) = typst_outline(indoc! {"
+            = Notes
+            // Pass 1: read title and abstract
+            /* A question about Σ */
+            // ∑ n-ary summation is not the marker
+            /* Σ a summary
+            that spans two lines */
+
+            ```typ
+            // Σ sample code
+            ```
+
+            // Σ The only summary
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h1 Notes 0..1
+                  Σ The only summary 11..12
+            "}
+        );
+    }
+
+    #[test]
+    fn typst_comments_sharing_a_line_with_other_text_are_summaries() {
+        // Typst comment nodes don't include the rest of their line, so neither this module nor
+        // the highlight query can tell them apart from summaries on their own line. Summaries go
+        // on their own line by convention.
+        let (_, outline) = typst_outline(indoc! {"
+            Text with a trailing // Σ comment
+            /* Σ text before more */ more
+            #let x = 1 // Σ code
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                Σ comment 0..1
+                Σ text before more 1..2
+                Σ code 2..3
+            "}
+        );
+    }
 }
