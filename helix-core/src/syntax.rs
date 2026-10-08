@@ -1291,10 +1291,19 @@ mod test {
     /// Returns the innermost highlight scope covering the first occurrence of `needle` in a
     /// Markdown `source`, with the loader configured for the theme scopes in `scopes`.
     fn markdown_scope_at(source: &str, needle: &str, scopes: &[&str]) -> Option<String> {
+        scope_at("markdown", source, needle, scopes)
+    }
+
+    /// Like [`markdown_scope_at`], for a LaTeX `source`.
+    fn latex_scope_at(source: &str, needle: &str, scopes: &[&str]) -> Option<String> {
+        scope_at("latex", source, needle, scopes)
+    }
+
+    fn scope_at(language: &str, source: &str, needle: &str, scopes: &[&str]) -> Option<String> {
         let loader = crate::config::default_lang_loader();
         loader.set_scopes(scopes.iter().map(|scope| scope.to_string()).collect());
         let source = Rope::from_str(source);
-        let language = loader.language_for_name("markdown").unwrap();
+        let language = loader.language_for_name(language).unwrap();
         let syntax = Syntax::new(source.slice(..), language, &loader).unwrap();
         let target = source.to_string().find(needle).unwrap() as u32;
 
@@ -1375,6 +1384,65 @@ mod test {
         // Comments inside code blocks.
         assert_eq!(
             scope_at("```html\n<!-- Σ sample -->\n```\n", "sample").as_deref(),
+            Some("comment")
+        );
+    }
+
+    #[test]
+    fn latex_summary_has_summary_scope() {
+        let scopes = ["comment", "comment.summary"];
+        let scope_at = |source: &str, needle: &str| latex_scope_at(source, needle, &scopes);
+
+        assert_eq!(
+            scope_at(
+                "\\section{Chapter}\n% Σ The passage summary\nProse.\n",
+                "The passage"
+            )
+            .as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(scope_at("%Σ\n", "Σ").as_deref(), Some("comment.summary"));
+        assert_eq!(
+            scope_at("\tIndented.\n\t% Σ Indented\n", "Σ Indented").as_deref(),
+            Some("comment.summary")
+        );
+        // The outline also takes a comment after text on its line as a summary.
+        assert_eq!(
+            scope_at("Prose. % Σ Trailing\n", "Trailing").as_deref(),
+            Some("comment.summary")
+        );
+    }
+
+    #[test]
+    fn latex_summary_falls_back_to_comment_scope() {
+        assert_eq!(
+            latex_scope_at("% Σ The passage summary\n", "The passage", &["comment"]).as_deref(),
+            Some("comment")
+        );
+    }
+
+    #[test]
+    fn latex_non_summary_comments_keep_comment_scope() {
+        let scopes = ["comment", "comment.summary"];
+        let scope_at = |source: &str, needle: &str| latex_scope_at(source, needle, &scopes);
+
+        // Template instructions without the marker.
+        assert_eq!(
+            scope_at("% Pass 1: read title\n", "Pass 1").as_deref(),
+            Some("comment")
+        );
+        // `Σ` somewhere other than first.
+        assert_eq!(
+            scope_at("% Note Σ later\n", "Note").as_deref(),
+            Some("comment")
+        );
+        // Comments that aren't line comments.
+        assert_eq!(
+            scope_at("\\begin{comment}\n% Σ sample\n\\end{comment}\n", "sample").as_deref(),
+            Some("comment")
+        );
+        assert_eq!(
+            scope_at("\\iffalse\n% Σ skipped\n\\fi\n", "skipped").as_deref(),
             Some("comment")
         );
     }

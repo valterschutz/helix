@@ -8,8 +8,8 @@
 //!
 //! Whether a captured comment is a summary is decided here from the language's comment tokens,
 //! so outline queries don't repeat the summary syntax. Highlight and injection queries can't call
-//! into Rust, so Markdown's `highlights.scm` and `injections.scm` repeat the summary pattern as a
-//! regex that must be kept in step with this module.
+//! into Rust, so Markdown's `highlights.scm` and `injections.scm` and LaTeX's `highlights.scm`
+//! repeat the summary pattern as a regex that must be kept in step with this module.
 
 use std::ops::Range;
 
