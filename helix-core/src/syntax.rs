@@ -1344,7 +1344,7 @@ mod test {
     }
 
     #[test]
-    fn markdown_summary_falls_back_to_scope_at() {
+    fn markdown_summary_falls_back_to_comment_scope() {
         let source = "<!-- Σ The passage summary -->\nProse.\n";
         assert_eq!(
             markdown_scope_at(source, "The passage summary", &["comment"]).as_deref(),
@@ -1353,7 +1353,7 @@ mod test {
     }
 
     #[test]
-    fn markdown_non_summary_comments_keep_scope_at() {
+    fn markdown_non_summary_comments_keep_comment_scope() {
         let scopes = ["comment", "comment.summary"];
         let scope_at = |source: &str, needle: &str| markdown_scope_at(source, needle, &scopes);
 

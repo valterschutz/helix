@@ -1,16 +1,18 @@
-use helix_core::hashmap;
-use helix_term::keymap;
+use helix_term::{
+    commands::MappableCommand,
+    keymap::{KeyTrie, KeyTrieNode},
+};
 use helix_view::{document::Mode, editor::Severity};
 
 use super::*;
 
-fn config_with_outline_picker() -> Config {
+/// The default config with `key` bound to `command` in normal mode.
+fn config_with_key(key: &str, command: MappableCommand) -> Config {
     let mut config = Config::default();
+    let keys = [(key.parse().unwrap(), KeyTrie::MappableCommand(command))];
     config.keys.insert(
         Mode::Normal,
-        keymap!({"Normal Mode"
-            "F2" => outline_picker,
-        }),
+        KeyTrie::Node(KeyTrieNode::new("Normal Mode", keys.into_iter().collect())),
     );
     config
 }
@@ -18,7 +20,7 @@ fn config_with_outline_picker() -> Config {
 #[tokio::test(flavor = "multi_thread")]
 async fn outline_picker_jumps_to_the_chosen_summary() -> anyhow::Result<()> {
     test_with_config(
-        AppBuilder::new().with_config(config_with_outline_picker()),
+        AppBuilder::new().with_config(config_with_key("F2", MappableCommand::outline_picker)),
         (
             indoc! {"\
                 #[#|]# Title
@@ -48,7 +50,7 @@ async fn outline_picker_jumps_to_the_chosen_summary() -> anyhow::Result<()> {
 async fn outline_picker_reports_languages_without_outline_support() -> anyhow::Result<()> {
     test_key_sequence(
         &mut AppBuilder::new()
-            .with_config(config_with_outline_picker())
+            .with_config(config_with_key("F2", MappableCommand::outline_picker))
             .build()?,
         Some(":lang rust<ret><F2>"),
         Some(&|app| {
@@ -64,20 +66,9 @@ async fn outline_picker_reports_languages_without_outline_support() -> anyhow::R
     .await
 }
 
-fn config_with_add_summary() -> Config {
-    let mut config = Config::default();
-    config.keys.insert(
-        Mode::Normal,
-        keymap!({"Normal Mode"
-            "F3" => add_summary,
-        }),
-    );
-    config
-}
-
 async fn test_add_summary<T: Into<TestCase>>(test_case: T) -> anyhow::Result<()> {
     test_with_config(
-        AppBuilder::new().with_config(config_with_add_summary()),
+        AppBuilder::new().with_config(config_with_key("F3", MappableCommand::add_summary)),
         test_case,
     )
     .await
@@ -288,7 +279,7 @@ async fn add_summary_reports_an_error_outside_a_paragraph() -> anyhow::Result<()
     ] {
         test_key_sequence(
             &mut AppBuilder::new()
-                .with_config(config_with_add_summary())
+                .with_config(config_with_key("F3", MappableCommand::add_summary))
                 .with_input_text(input)
                 .build()?,
             Some(":lang markdown<ret><F3>"),
