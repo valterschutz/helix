@@ -793,6 +793,60 @@ mod test {
     }
 
     #[test]
+    fn latex_chapters_span_their_title_lines() {
+        let (text, outline) = latex_outline(indoc! {r"
+            \section[Short]{A title
+              that \emph{wraps}}\label{sec:wraps}
+            Text.
+            \subsection{}
+            Text.
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {r"
+                h3 A title that \emph{wraps} 0..2
+                  h4  3..4
+            "}
+        );
+        let text = text.slice(..);
+        assert_eq!(outline.paragraph_at(text, 1), None);
+        assert_eq!(outline.paragraph_at(text, 2), Some(2..3));
+    }
+
+    #[test]
+    fn latex_passages_and_paragraphs_are_bounded_by_summaries_and_chapters() {
+        let (text, outline) = latex_outline(indoc! {r"
+            % Σ intro
+            Intro.
+            \section{One}
+            % Σ first
+            First a.
+            First b.
+
+            Unsummarised.
+            \section{Two}
+        "});
+        let passages: Vec<_> = outline
+            .passages()
+            .map(|passage| (passage.summary.text.as_str(), passage.lines))
+            .collect();
+        assert_eq!(passages, [("intro", 0..2), ("first", 3..8)]);
+
+        let text = text.slice(..);
+        let summary_above = |line| {
+            let paragraph = outline.paragraph_at(text, line)?;
+            Some(outline.summary_above(&paragraph)?.text.as_str())
+        };
+        assert_eq!(outline.paragraph_at(text, 5), Some(4..6));
+        assert_eq!(summary_above(5), Some("first"));
+        assert_eq!(outline.paragraph_at(text, 7), Some(7..8));
+        assert_eq!(summary_above(7), None);
+        for line in [0, 2, 3, 6, 8] {
+            assert_eq!(outline.paragraph_at(text, line), None);
+        }
+    }
+
+    #[test]
     fn languages_without_an_outline_query_have_no_outline() {
         let text = Rope::from_str("// Σ a comment\nfn main() {}\n");
         let language = LOADER.language_for_name("rust").unwrap();
