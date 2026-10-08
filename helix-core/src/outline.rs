@@ -692,7 +692,7 @@ mod test {
     }
 
     #[test]
-    fn line_comment_summaries_are_entered_at_the_end_of_their_text() {
+    fn latex_summaries_are_entered_at_the_end_of_their_text() {
         let (text, outline) =
             latex_outline("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
         assert_eq!(
@@ -709,7 +709,7 @@ mod test {
     }
 
     #[test]
-    fn latex_sectioning_commands_are_chapters_at_successive_levels() {
+    fn latex_headings_are_chapters_at_successive_levels() {
         let (_, outline) = latex_outline(indoc! {r"
             \documentclass{book}
             \begin{document}
@@ -773,7 +773,7 @@ mod test {
     }
 
     #[test]
-    fn only_latex_line_comments_starting_with_the_marker_are_summaries() {
+    fn latex_only_line_comments_starting_with_the_marker_are_summaries() {
         let (_, outline) = latex_outline(indoc! {r"
             \section{Notes}
             % Pass 1: read title and abstract
