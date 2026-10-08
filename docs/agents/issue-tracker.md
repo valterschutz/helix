@@ -11,7 +11,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
-Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+Always target the fork: pass `-R valterschutz/helix`, or run `gh repo set-default valterschutz/helix` once per clone. Without that, `gh` resolves this fork to the upstream `helix-editor/helix` and would read or file issues there.
 
 ## Pull requests as a triage surface
 
