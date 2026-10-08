@@ -31,3 +31,5 @@
  (#not-match? @_last "^<[^\\s<>]+>$"))
 (heading "======" . (_)* @name . (label) .) @chapter.6
 (heading "======" .) @chapter.6
+
+(comment) @comment

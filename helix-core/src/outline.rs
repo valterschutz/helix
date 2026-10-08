@@ -836,4 +836,36 @@ mod test {
             "}
         );
     }
+
+    #[test]
+    fn typst_line_and_single_line_block_comment_summaries_sit_under_their_chapter() {
+        let (_, outline) = typst_outline(indoc! {"
+            // Σ Why this document exists
+            Intro text.
+
+            = Background
+            /* Σ The problem */
+            Some text.
+            //Σ   A second passage
+            More text.
+
+            == Detail
+
+            // Σ
+            Unsummarised text.
+            /*Σ*/
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                Σ Why this document exists 0..1
+                h1 Background 3..4
+                  Σ The problem 4..5
+                  Σ A second passage 6..7
+                  h2 Detail 9..10
+                    Σ  11..12
+                    Σ  13..14
+            "}
+        );
+    }
 }
