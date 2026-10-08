@@ -2,8 +2,14 @@
 //!
 //! A language supports outlines when it has an `outline.scm` query. The query captures each
 //! heading as `@chapter.<level>` with the text to show as `@name`, and comments as `@comment`.
-//! Whether a comment is a summary is decided here from the language's comment tokens, so
-//! queries don't repeat the summary syntax.
+//! `@chapter.<level>` must capture the heading or title node, not a node that spans the whole
+//! chapter body such as LaTeX's `section`: the captured node's lines are the chapter entry's lines,
+//! which the picker jumps to and which are not part of any paragraph.
+//!
+//! Whether a captured comment is a summary is decided here from the language's comment tokens,
+//! so outline queries don't repeat the summary syntax. Highlight and injection queries can't call
+//! into Rust, so Markdown's `highlights.scm` and `injections.scm` repeat the summary pattern as a
+//! regex that must be kept in step with this module.
 
 use std::ops::Range;
 
@@ -86,6 +92,19 @@ pub struct OutlineEntry {
     /// Indentation steps in the outline view. Chapters count from the shallowest heading level
     /// in the document, and summaries sit one step under the chapter they follow.
     pub depth: usize,
+}
+
+impl OutlineEntry {
+    pub fn is_summary(&self) -> bool {
+        matches!(self.kind, OutlineEntryKind::Summary { .. })
+    }
+
+    pub fn chapter_level(&self) -> Option<u8> {
+        match self.kind {
+            OutlineEntryKind::Chapter { level } => Some(level),
+            OutlineEntryKind::Summary { .. } => None,
+        }
+    }
 }
 
 /// A summary plus everything after it up to the next summary or chapter.
@@ -180,20 +199,16 @@ impl Outline {
 
         let shallowest_level = entries
             .iter()
-            .filter_map(|entry| match entry.kind {
-                OutlineEntryKind::Chapter { level } => Some(level),
-                OutlineEntryKind::Summary { .. } => None,
-            })
+            .filter_map(OutlineEntry::chapter_level)
             .min()
             .unwrap_or_default();
         let mut summary_depth = 0;
         for entry in &mut entries {
-            match entry.kind {
-                OutlineEntryKind::Chapter { level } => {
-                    entry.depth = usize::from(level - shallowest_level);
-                    summary_depth = entry.depth + 1;
-                }
-                OutlineEntryKind::Summary { .. } => entry.depth = summary_depth,
+            if let Some(level) = entry.chapter_level() {
+                entry.depth = usize::from(level - shallowest_level);
+                summary_depth = entry.depth + 1;
+            } else {
+                entry.depth = summary_depth;
             }
         }
 
@@ -212,7 +227,7 @@ impl Outline {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| matches!(entry.kind, OutlineEntryKind::Summary { .. }))
+            .filter(|(_, entry)| entry.is_summary())
             .map(|(idx, summary)| {
                 let end = self
                     .entries
@@ -260,30 +275,39 @@ impl Outline {
     pub fn summary_above(&self, paragraph: &Range<usize>) -> Option<&OutlineEntry> {
         let line_above = paragraph.start.checked_sub(1)?;
         self.entry_at_line(line_above)
-            .filter(|entry| matches!(entry.kind, OutlineEntryKind::Summary { .. }))
+            .filter(|entry| entry.is_summary())
     }
 }
 
-/// An empty summary in the language's comment syntax, preferring line comments, and the char
-/// offset in it where the summary text goes. Returns `None` when the language has no comment
-/// tokens.
-pub fn empty_summary(config: &LanguageConfiguration) -> Option<(String, usize)> {
+/// An empty summary in the language's comment syntax.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmptySummary {
+    /// The summary line without indentation and line ending.
+    pub line: String,
+    /// The char offset in `line` where the summary text goes.
+    pub text_offset: usize,
+}
+
+/// An empty summary in the language's comment syntax, preferring line comments. Returns `None`
+/// when the language has no comment tokens.
+pub fn empty_summary(config: &LanguageConfiguration) -> Option<EmptySummary> {
     let line_comment = config.comment_tokens.iter().flatten().next();
     let block_comment = config.block_comment_tokens.iter().flatten().next();
-    let (summary, text_offset) = match (line_comment, block_comment) {
+    let summary = match (line_comment, block_comment) {
         (Some(token), _) => {
-            let summary = format!("{token} {SUMMARY_MARKER} ");
-            let text_offset = summary.chars().count();
-            (summary, text_offset)
+            let line = format!("{token} {SUMMARY_MARKER} ");
+            let text_offset = line.chars().count();
+            EmptySummary { line, text_offset }
         }
         (None, Some(token)) => {
             let opener = format!("{} {SUMMARY_MARKER} ", token.start);
             let text_offset = opener.chars().count();
-            (format!("{opener} {}", token.end), text_offset)
+            let line = format!("{opener} {}", token.end);
+            EmptySummary { line, text_offset }
         }
         (None, None) => return None,
     };
-    Some((summary, text_offset))
+    Some(summary)
 }
 
 /// Returns the byte range of the trimmed summary text in a single-line `comment` whose text, after
@@ -397,9 +421,9 @@ mod test {
     fn render(outline: &Outline) -> String {
         let mut out = String::new();
         for entry in outline.entries() {
-            let marker = match entry.kind {
-                OutlineEntryKind::Chapter { level } => format!("h{level}"),
-                OutlineEntryKind::Summary { .. } => "Σ".to_string(),
+            let marker = match entry.chapter_level() {
+                Some(level) => format!("h{level}"),
+                None => "Σ".to_string(),
             };
             let indent = "  ".repeat(entry.depth);
             writeln!(out, "{indent}{marker} {} {:?}", entry.text, entry.lines).unwrap();
@@ -580,13 +604,14 @@ mod test {
     fn empty_summaries_use_the_language_comment_syntax_preferring_line_comments() {
         let empty_summary = |language| {
             let language = LOADER.language_for_name(language).unwrap();
-            let (summary, text_offset) = super::empty_summary(LOADER.language(language).config())?;
-            let text_start = summary
+            let EmptySummary { line, text_offset } =
+                super::empty_summary(LOADER.language(language).config())?;
+            let text_start = line
                 .char_indices()
                 .map(|(idx, _)| idx)
-                .chain([summary.len()])
+                .chain([line.len()])
                 .nth(text_offset)?;
-            let (before, after) = summary.split_at(text_start);
+            let (before, after) = line.split_at(text_start);
             Some(format!("{before}|{after}"))
         };
         assert_eq!(empty_summary("markdown").as_deref(), Some("<!-- Σ | -->"));

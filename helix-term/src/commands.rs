@@ -4089,8 +4089,7 @@ fn add_summary(cx: &mut Context) {
             return;
         }
     };
-    let Some((summary, text_offset)) = doc.language_config().and_then(outline::empty_summary)
-    else {
+    let Some(summary) = doc.language_config().and_then(outline::empty_summary) else {
         cx.editor
             .set_error("No comment syntax for this buffer's language");
         return;
@@ -4099,8 +4098,8 @@ fn add_summary(cx: &mut Context) {
     let line_start = text.line_to_char(paragraph.start);
     let first_line = text.line(paragraph.start);
     let indent = first_line.slice(..first_line.first_non_whitespace_char().unwrap_or(0));
-    let cursor = line_start + indent.len_chars() + text_offset;
-    let summary_line = format!("{indent}{summary}{}", doc.line_ending.as_str());
+    let cursor = line_start + indent.len_chars() + summary.text_offset;
+    let summary_line = format!("{indent}{}{}", summary.line, doc.line_ending.as_str());
     let transaction = Transaction::insert(
         doc.text(),
         &Selection::point(line_start),
