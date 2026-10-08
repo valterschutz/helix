@@ -17,59 +17,61 @@ fn config_with_key(key: &str, command: MappableCommand) -> Config {
     config
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn outline_picker_jumps_to_the_chosen_summary() -> anyhow::Result<()> {
+async fn test_outline_picker<T: Into<TestCase>>(test_case: T) -> anyhow::Result<()> {
     test_with_config(
         AppBuilder::new().with_config(config_with_key("F2", MappableCommand::outline_picker)),
-        (
-            indoc! {"\
-                #[#|]# Title
-                <!-- Σ The first passage -->
-                First.
-
-                ## Detail
-                <!-- Σ The second passage -->
-                Second.
-            "},
-            ":lang markdown<ret><F2>second<ret>",
-            indoc! {"\
-                # Title
-                <!-- Σ The first passage -->
-                First.
-
-                ## Detail
-                #[<|]#!-- Σ The second passage -->
-                Second.
-            "},
-        ),
+        test_case,
     )
     .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn outline_picker_jumps_to_the_chosen_summary() -> anyhow::Result<()> {
+    test_outline_picker((
+        indoc! {"\
+            #[#|]# Title
+            <!-- Σ The first passage -->
+            First.
+
+            ## Detail
+            <!-- Σ The second passage -->
+            Second.
+        "},
+        ":lang markdown<ret><F2>second<ret>",
+        indoc! {"\
+            # Title
+            <!-- Σ The first passage -->
+            First.
+
+            ## Detail
+            #[<|]#!-- Σ The second passage -->
+            Second.
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn outline_picker_lists_an_empty_summary_as_a_placeholder() -> anyhow::Result<()> {
-    test_with_config(
-        AppBuilder::new().with_config(config_with_key("F2", MappableCommand::outline_picker)),
-        (
-            indoc! {"\
-                #[#|]# Title
-                <!-- Σ The first passage -->
-                First.
+    test_outline_picker((
+        indoc! {"\
+            #[#|]# Title
+            <!-- Σ The first passage -->
+            First.
 
-                <!-- Σ -->
-                Second.
-            "},
-            ":lang markdown<ret><F2>(empty summary)<ret>",
-            indoc! {"\
-                # Title
-                <!-- Σ The first passage -->
-                First.
+            <!-- Σ -->
+            Second.
+        "},
+        ":lang markdown<ret><F2>(empty summary)<ret>",
+        indoc! {"\
+            # Title
+            <!-- Σ The first passage -->
+            First.
 
-                #[<|]#!-- Σ -->
-                Second.
-            "},
-        ),
-    )
+            #[<|]#!-- Σ -->
+            Second.
+        "},
+    ))
     .await
 }
 
@@ -291,6 +293,32 @@ async fn add_summary_splits_a_passage_at_a_later_paragraph() -> anyhow::Result<(
     .await
 }
 
+/// Runs add-summary on `input` in `language` and checks that it reports an error and changes
+/// nothing.
+async fn test_add_summary_error(language: &str, input: &str) -> anyhow::Result<()> {
+    let keys = format!(":lang {language}<ret><F3>");
+    test_key_sequence(
+        &mut AppBuilder::new()
+            .with_config(config_with_key("F3", MappableCommand::add_summary))
+            .with_input_text(input)
+            .build()?,
+        Some(&keys),
+        Some(&|app| {
+            let (status, &severity) = app.editor.get_status().unwrap();
+            assert_eq!(severity, Severity::Error);
+            assert_eq!(status.as_ref(), "No paragraph under the cursor");
+
+            let (view, doc) = helix_view::current_ref!(app.editor);
+            let (text, selection) = helix_core::test::print(input);
+            assert_eq!(doc.text().to_string(), text);
+            assert_eq!(doc.selection(view.id), &selection);
+            assert_eq!(app.editor.mode, Mode::Normal);
+        }),
+        false,
+    )
+    .await
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn add_summary_reports_an_error_outside_a_paragraph() -> anyhow::Result<()> {
     for input in [
@@ -304,26 +332,7 @@ async fn add_summary_reports_an_error_outside_a_paragraph() -> anyhow::Result<()
             Text.
         "},
     ] {
-        test_key_sequence(
-            &mut AppBuilder::new()
-                .with_config(config_with_key("F3", MappableCommand::add_summary))
-                .with_input_text(input)
-                .build()?,
-            Some(":lang markdown<ret><F3>"),
-            Some(&|app| {
-                let (status, &severity) = app.editor.get_status().unwrap();
-                assert_eq!(severity, Severity::Error);
-                assert_eq!(status.as_ref(), "No paragraph under the cursor");
-
-                let (view, doc) = helix_view::current_ref!(app.editor);
-                let (text, selection) = helix_core::test::print(input);
-                assert_eq!(doc.text().to_string(), text);
-                assert_eq!(doc.selection(view.id), &selection);
-                assert_eq!(app.editor.mode, Mode::Normal);
-            }),
-            false,
-        )
-        .await?;
+        test_add_summary_error("markdown", input).await?;
     }
     Ok(())
 }
@@ -336,6 +345,244 @@ async fn add_summary_is_undone_in_one_step() -> anyhow::Result<()> {
             Last #[l|]#ine.
         "},
         ":lang markdown<ret><F3><esc>u",
+        indoc! {"\
+            First line.
+            Last #[l|]#ine.
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typst_outline_picker_jumps_to_the_chosen_summary() -> anyhow::Result<()> {
+    test_outline_picker((
+        indoc! {"\
+            #[=|]# Title
+            // Σ The first passage
+            First.
+
+            == Detail
+            /* Σ The second passage */
+            Second.
+        "},
+        ":lang typst<ret><F2>second<ret>",
+        indoc! {"\
+            = Title
+            // Σ The first passage
+            First.
+
+            == Detail
+            #[/|]#* Σ The second passage */
+            Second.
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typst_add_summary_inserts_a_line_comment_summary_indented_like_the_paragraph(
+) -> anyhow::Result<()> {
+    let input = indoc! {"\
+        = Title
+
+        - A list item
+
+          A second paragraph
+          in the #[l|]#ist item.
+    "};
+    test_add_summary((
+        input,
+        ":lang typst<ret><F3>",
+        indoc! {"\
+            = Title
+
+            - A list item
+
+              // Σ #[\n|]#
+              A second paragraph
+              in the list item.
+        "},
+    ))
+    .await?;
+
+    test_add_summary((
+        input,
+        ":lang typst<ret><F3>Why",
+        indoc! {"\
+            = Title
+
+            - A list item
+
+              // Σ Why#[\n|]#
+              A second paragraph
+              in the list item.
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typst_add_summary_moves_into_the_existing_summary() -> anyhow::Result<()> {
+    for (input, expected) in [
+        (
+            indoc! {"\
+                /* Σ Intro */
+                Intro #[t|]#ext.
+            "},
+            indoc! {"\
+                /* Σ Intro#[ |]#*/
+                Intro text.
+            "},
+        ),
+        (
+            indoc! {"\
+                // Σ Intro
+                Intro #[t|]#ext.
+            "},
+            indoc! {"\
+                // Σ Intro#[\n|]#
+                Intro text.
+            "},
+        ),
+        (
+            indoc! {"\
+                #[/|]#/ Σ
+                Intro text.
+            "},
+            indoc! {"\
+                // Σ #[\n|]#
+                Intro text.
+            "},
+        ),
+    ] {
+        test_add_summary((input, ":lang typst<ret><F3>", expected)).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn latex_outline_picker_jumps_to_the_chosen_summary() -> anyhow::Result<()> {
+    test_outline_picker((
+        indoc! {"\
+            #[\\|]#section{Title}
+            % Σ The first passage
+            First.
+
+            \\subsection{Detail}
+            % Σ The second passage
+            Second.
+        "},
+        ":lang latex<ret><F2>second<ret>",
+        indoc! {"\
+            \\section{Title}
+            % Σ The first passage
+            First.
+
+            \\subsection{Detail}
+            #[%|]# Σ The second passage
+            Second.
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn latex_add_summary_inserts_a_line_comment_summary_indented_like_the_paragraph(
+) -> anyhow::Result<()> {
+    test_add_summary((
+        indoc! {"\
+            \\begin{quote}
+
+            \tFirst line.
+            \tLast #[l|]#ine.
+
+            \\end{quote}
+        "},
+        ":lang latex<ret><F3>",
+        indoc! {"\
+            \\begin{quote}
+
+            \t% Σ #[\n|]#
+            \tFirst line.
+            \tLast line.
+
+            \\end{quote}
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn latex_add_summary_enters_insert_mode_after_the_marker() -> anyhow::Result<()> {
+    test_add_summary((
+        indoc! {"\
+            \\section{Title}
+
+            First #[l|]#ine.
+        "},
+        ":lang latex<ret><F3>Why",
+        indoc! {"\
+            \\section{Title}
+
+            % Σ Why#[\n|]#
+            First line.
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn latex_add_summary_moves_into_the_existing_summary() -> anyhow::Result<()> {
+    for (input, expected) in [
+        (
+            indoc! {"\
+                % Σ The passage
+                First line.
+                Last #[l|]#ine.
+            "},
+            indoc! {"\
+                % Σ The passage#[\n|]#
+                First line.
+                Last line.
+            "},
+        ),
+        // An empty summary is entered after the space following the marker.
+        (
+            indoc! {"\
+                #[%|]#Σ
+                Text.
+            "},
+            indoc! {"\
+                %Σ #[\n|]#
+                Text.
+            "},
+        ),
+    ] {
+        test_add_summary((input, ":lang latex<ret><F3>", expected)).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn latex_add_summary_reports_an_error_on_a_chapter() -> anyhow::Result<()> {
+    test_add_summary_error(
+        "latex",
+        indoc! {"\
+            \\sec#[t|]#ion{Title}
+            Text.
+        "},
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn latex_add_summary_is_undone_in_one_step() -> anyhow::Result<()> {
+    test_add_summary((
+        indoc! {"\
+            First line.
+            Last #[l|]#ine.
+        "},
+        ":lang latex<ret><F3><esc>u",
         indoc! {"\
             First line.
             Last #[l|]#ine.

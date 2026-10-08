@@ -2,14 +2,17 @@
 //!
 //! A language supports outlines when it has an `outline.scm` query. The query captures each
 //! heading as `@chapter.<level>` with the text to show as `@name`, and comments as `@comment`.
+//! `@name` may capture several nodes, such as the text and markup in a Typst heading, and then
+//! spans from the first to the last of them.
 //! `@chapter.<level>` must capture the heading or title node, not a node that spans the whole
 //! chapter body such as LaTeX's `section`: the captured node's lines are the chapter entry's lines,
 //! which the picker jumps to and which are not part of any paragraph.
 //!
 //! Whether a captured comment is a summary is decided here from the language's comment tokens,
 //! so outline queries don't repeat the summary syntax. Highlight and injection queries can't call
-//! into Rust, so Markdown's `highlights.scm` and `injections.scm` repeat the summary pattern as a
-//! regex that must be kept in step with this module.
+//! into Rust, so Markdown's `highlights.scm` and `injections.scm`, and the `highlights.scm` of
+//! LaTeX and Typst, repeat the summary pattern as a regex that must be kept in step with this
+//! module.
 
 use std::ops::Range;
 
@@ -129,15 +132,6 @@ impl Outline {
         let language = syntax.root_language();
         let query = loader.outline_query(language)?;
         let config = loader.language(language).config();
-        Some(Self::from_query(text, syntax, query, config))
-    }
-
-    fn from_query(
-        text: RopeSlice,
-        syntax: &Syntax,
-        query: &OutlineQuery,
-        config: &LanguageConfiguration,
-    ) -> Self {
         let root = syntax.tree().root_node();
         let mut cursor = InactiveQueryCursor::new(0..u32::MAX, TREE_SITTER_MATCH_LIMIT)
             .execute_query(&query.query, &root, RopeInput::new(text));
@@ -156,7 +150,10 @@ impl Outline {
                 if let Some(level) = query.chapter_level(matched.capture) {
                     chapter = Some((level, byte_range));
                 } else if query.name_capture == Some(matched.capture) {
-                    name = Some(byte_range);
+                    name = Some(match name {
+                        Some(Range { start, .. }) => start..byte_range.end,
+                        None => byte_range,
+                    });
                 } else if query.comment_capture == Some(matched.capture) {
                     comment = Some(byte_range);
                 }
@@ -213,10 +210,10 @@ impl Outline {
         }
 
         let line_count = text.len_lines() - usize::from(get_line_ending(&text).is_some());
-        Self {
+        Some(Self {
             entries,
             line_count,
-        }
+        })
     }
 
     pub fn entries(&self) -> &[OutlineEntry] {
@@ -311,8 +308,8 @@ pub fn empty_summary(config: &LanguageConfiguration) -> Option<EmptySummary> {
 }
 
 /// Returns the byte range of the trimmed summary text in a single-line `comment` whose text, after
-/// the language's comment opener, starts with [`SUMMARY_MARKER`], and the padding that lays out an
-/// empty summary like a new one.
+/// the language's comment opener and any spaces or tabs, starts with [`SUMMARY_MARKER`], and the
+/// padding that lays out an empty summary like a new one.
 fn summary_text_range(
     comment: &str,
     config: &LanguageConfiguration,
@@ -335,7 +332,9 @@ fn summary_text_range(
     line_comment_texts
         .chain(block_comment_texts)
         .find_map(|(text_start, text, has_closer)| {
-            let after_marker = text.trim_start().strip_prefix(SUMMARY_MARKER)?;
+            let after_marker = text
+                .trim_start_matches([' ', '\t'])
+                .strip_prefix(SUMMARY_MARKER)?;
             let marker_end = text_start + text.len() - after_marker.len();
             let summary = after_marker.trim();
             if !summary.is_empty() {
@@ -409,8 +408,20 @@ mod test {
     static LOADER: Lazy<Loader> = Lazy::new(crate::config::default_lang_loader);
 
     fn markdown_outline(text: &str) -> (Rope, Outline) {
+        language_outline("markdown", text)
+    }
+
+    fn typst_outline(text: &str) -> (Rope, Outline) {
+        language_outline("typst", text)
+    }
+
+    fn latex_outline(text: &str) -> (Rope, Outline) {
+        language_outline("latex", text)
+    }
+
+    fn language_outline(language: &str, text: &str) -> (Rope, Outline) {
         let text = Rope::from_str(text);
-        let language = LOADER.language_for_name("markdown").unwrap();
+        let language = LOADER.language_for_name(language).unwrap();
         let syntax = Syntax::new(text.slice(..), language, &LOADER).unwrap();
         let outline = Outline::new(text.slice(..), &syntax, &LOADER).unwrap();
         (text, outline)
@@ -429,6 +440,20 @@ mod test {
             writeln!(out, "{indent}{marker} {} {:?}", entry.text, entry.lines).unwrap();
         }
         out
+    }
+
+    /// Each passage as its summary text and line range.
+    fn passages(outline: &Outline) -> Vec<(&str, Range<usize>)> {
+        outline
+            .passages()
+            .map(|passage| (passage.summary.text.as_str(), passage.lines))
+            .collect()
+    }
+
+    /// The text of the summary directly above the paragraph containing `line`.
+    fn summary_above<'a>(outline: &'a Outline, text: RopeSlice, line: usize) -> Option<&'a str> {
+        let paragraph = outline.paragraph_at(text, line)?;
+        Some(outline.summary_above(&paragraph)?.text.as_str())
     }
 
     #[test]
@@ -537,6 +562,18 @@ mod test {
                   Σ The only summary 15..16
             "}
         );
+    }
+
+    #[test]
+    fn only_spaces_and_tabs_may_separate_the_comment_opener_from_the_marker() {
+        // The highlight queries allow only `[ \t]` there, and the outline agrees with them.
+        let (_, outline) = markdown_outline("<!--\tΣ Tab -->\n\n<!--\u{a0}Σ No-break space -->\n");
+        assert_eq!(render(&outline), "Σ Tab 0..1\n");
+        let (_, outline) = latex_outline("%\tΣ Tab\n%\u{a0}Σ No-break space\n");
+        assert_eq!(render(&outline), "Σ Tab 0..1\n");
+        let (_, outline) =
+            typst_outline("//\tΣ Tab\n//\u{a0}Σ No-break space\n/*\u{a0}Σ No-break space */\n");
+        assert_eq!(render(&outline), "Σ Tab 0..1\n");
     }
 
     #[test]
@@ -669,18 +706,9 @@ mod test {
     }
 
     #[test]
-    fn line_comment_summaries_are_entered_at_the_end_of_their_text() {
-        // No LaTeX outline query exists yet, so this one only captures comments.
-        let text = Rope::from_str("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
-        let language = LOADER.language_for_name("latex").unwrap();
-        let syntax = Syntax::new(text.slice(..), language, &LOADER).unwrap();
-        let query = OutlineQuery::new(
-            syntax.tree().root_node().grammar(),
-            "(line_comment) @comment",
-        )
-        .unwrap();
-        let config = LOADER.language(language).config();
-        let outline = Outline::from_query(text.slice(..), &syntax, &query, config);
+    fn latex_summaries_are_entered_at_the_end_of_their_text() {
+        let (text, outline) =
+            latex_outline("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
         assert_eq!(
             entered_summaries(&text, &outline),
             [
@@ -692,6 +720,148 @@ mod test {
                 "% Σ |  ",
             ]
         );
+    }
+
+    #[test]
+    fn latex_headings_are_chapters_at_successive_levels() {
+        let (_, outline) = latex_outline(indoc! {r"
+            \documentclass{book}
+            \begin{document}
+            \part{One}
+            \chapter{Two}
+            \section{Three}
+            Text.
+            \subsection*{Four}
+            \subsubsection{Five}
+            \paragraph{Six}
+            \subparagraph*{Seven}
+            \chapter*{Two again}
+            \end{document}
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h1 One 2..3
+                  h2 Two 3..4
+                    h3 Three 4..5
+                      h4 Four 6..7
+                        h5 Five 7..8
+                          h6 Six 8..9
+                            h7 Seven 9..10
+                  h2 Two again 10..11
+            "}
+        );
+
+        let (_, outline) = latex_outline("\\section{One}\n\\subsection{Two}\n");
+        assert_eq!(render(&outline), "h3 One 0..1\n  h4 Two 1..2\n");
+    }
+
+    #[test]
+    fn latex_summaries_sit_one_step_under_their_chapter() {
+        let (_, outline) = latex_outline(indoc! {r"
+            % Σ Why this document exists
+            \section{Background}
+            %Σ The problem
+              % Σ   An indented passage
+            % Σ
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                Σ Why this document exists 0..1
+                h3 Background 1..2
+                  Σ The problem 2..3
+                  Σ An indented passage 3..4
+                  Σ  4..5
+            "}
+        );
+    }
+
+    #[test]
+    fn latex_only_line_comments_starting_with_the_marker_are_summaries() {
+        let (_, outline) = latex_outline(indoc! {r"
+            \section{Notes}
+            % Pass 1: read title and abstract
+            % A question about Σ
+            % ∑ n-ary summation is not the marker
+            \begin{verbatim}
+            % Σ sample code
+            \end{verbatim}
+            \begin{comment}
+            % Σ commented out
+            \end{comment}
+            \iffalse
+            % Σ skipped
+            \fi
+            % Σ The only summary
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h3 Notes 0..1
+                  Σ The only summary 13..14
+            "}
+        );
+    }
+
+    #[test]
+    fn latex_summaries_after_text_on_their_line_are_summaries() {
+        // The comment node covers only the comment, not its line, so the outline agrees with
+        // the highlight query, which can't see the text before the comment either.
+        let (_, outline) = latex_outline("Text. % Σ Trailing\n");
+        assert_eq!(render(&outline), "Σ Trailing 0..1\n");
+    }
+
+    #[test]
+    fn latex_chapters_span_their_title_lines() {
+        let (text, outline) = latex_outline(indoc! {r"
+            \section[Short]{A title
+              that \emph{wraps}}\label{sec:wraps}
+            Text.
+            \subsection{}
+            Text.
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {r"
+                h3 A title that \emph{wraps} 0..2
+                  h4  3..4
+            "}
+        );
+        let text = text.slice(..);
+        assert_eq!(outline.paragraph_at(text, 1), None);
+        assert_eq!(outline.paragraph_at(text, 2), Some(2..3));
+    }
+
+    #[test]
+    fn latex_chapter_titles_with_math_are_shown_whole() {
+        let (_, outline) = latex_outline("\\section{The $x$ case}\n");
+        assert_eq!(render(&outline), "h3 The $x$ case 0..1\n");
+    }
+
+    #[test]
+    fn latex_passages_and_paragraphs_are_bounded_by_summaries_and_chapters() {
+        let (text, outline) = latex_outline(indoc! {r"
+            % Σ intro
+            Intro.
+            \section{One}
+            % Σ first
+            First a.
+            First b.
+
+            Unsummarised.
+            \section{Two}
+        "});
+        assert_eq!(passages(&outline), [("intro", 0..2), ("first", 3..8)]);
+
+        let text = text.slice(..);
+        assert_eq!(outline.paragraph_at(text, 5), Some(4..6));
+        assert_eq!(summary_above(&outline, text, 5), Some("first"));
+        assert_eq!(outline.paragraph_at(text, 7), Some(7..8));
+        assert_eq!(summary_above(&outline, text, 7), None);
+        for line in [0, 2, 3, 6, 8] {
+            assert_eq!(outline.paragraph_at(text, line), None);
+        }
     }
 
     #[test]
@@ -720,12 +890,8 @@ mod test {
             <!-- Σ last -->
             Last.
         "});
-        let passages: Vec<_> = outline
-            .passages()
-            .map(|passage| (passage.summary.text.as_str(), passage.lines))
-            .collect();
         assert_eq!(
-            passages,
+            passages(&outline),
             [
                 ("intro", 0..3),
                 ("first", 4..6),
@@ -750,21 +916,17 @@ mod test {
             Three.
         "});
         let text = text.slice(..);
-        let summary_above = |line| {
-            let paragraph = outline.paragraph_at(text, line)?;
-            Some(outline.summary_above(&paragraph)?.text.as_str())
-        };
 
         for line in 2..5 {
             assert_eq!(outline.paragraph_at(text, line), Some(2..5));
-            assert_eq!(summary_above(line), Some("first"));
+            assert_eq!(summary_above(&outline, text, line), Some("first"));
         }
         for line in 6..8 {
             assert_eq!(outline.paragraph_at(text, line), Some(6..8));
-            assert_eq!(summary_above(line), None);
+            assert_eq!(summary_above(&outline, text, line), None);
         }
         assert_eq!(outline.paragraph_at(text, 9), Some(9..10));
-        assert_eq!(summary_above(9), Some("third"));
+        assert_eq!(summary_above(&outline, text, 9), Some("third"));
 
         // Blank lines, chapters and summaries are not part of any paragraph.
         for line in [0, 1, 5, 8] {
@@ -774,5 +936,165 @@ mod test {
         assert_eq!(entry_text(0), Some("Title"));
         assert_eq!(entry_text(1), Some("first"));
         assert_eq!(entry_text(2), None);
+    }
+
+    #[test]
+    fn typst_headings_are_chapters_at_their_number_of_equals_signs() {
+        let (_, outline) = typst_outline(indoc! {"
+            = One
+            == Two
+            === Three
+            ==== Four
+            ===== Five
+            ====== Six
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h1 One 0..1
+                  h2 Two 1..2
+                    h3 Three 2..3
+                      h4 Four 3..4
+                        h5 Five 4..5
+                          h6 Six 5..6
+            "}
+        );
+    }
+
+    #[test]
+    fn typst_chapter_names_span_the_heading_markup_without_its_label() {
+        // A Typst heading has no single node for its text, so `@name` captures several nodes.
+        let (_, outline) = typst_outline(indoc! {"
+            = The *main*   result <intro>
+            == `code` and $x$ math
+            === Plain <plain>
+            ====
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h1 The *main* result 0..1
+                  h2 `code` and $x$ math 1..2
+                    h3 Plain 2..3
+                      h4  3..4
+            "}
+        );
+    }
+
+    #[test]
+    fn typst_line_and_single_line_block_comment_summaries_sit_under_their_chapter() {
+        let (_, outline) = typst_outline(indoc! {"
+            // Σ Why this document exists
+            = Background
+            /* Σ The problem */
+            //Σ   A second passage
+            // Σ
+            /*Σ*/
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                Σ Why this document exists 0..1
+                h1 Background 1..2
+                  Σ The problem 2..3
+                  Σ A second passage 3..4
+                  Σ  4..5
+                  Σ  5..6
+            "}
+        );
+    }
+
+    #[test]
+    fn typst_comments_without_the_marker_first_on_one_line_are_not_summaries() {
+        let (_, outline) = typst_outline(indoc! {"
+            = Notes
+            // Pass 1: read title and abstract
+            /* A question about Σ */
+            // ∑ n-ary summation is not the marker
+            /* Σ a summary
+            that spans two lines */
+
+            ```typ
+            // Σ sample code
+            ```
+
+            // Σ The only summary
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h1 Notes 0..1
+                  Σ The only summary 11..12
+            "}
+        );
+    }
+
+    #[test]
+    fn typst_comments_sharing_a_line_with_other_text_are_summaries() {
+        // Typst comment nodes don't include the rest of their line, so neither this module nor
+        // the highlight query can tell them apart from summaries on their own line. Summaries go
+        // on their own line by convention.
+        let (_, outline) = typst_outline(indoc! {"
+            Text with a trailing // Σ comment
+            /* Σ text before more */ more
+            #let x = 1 // Σ code
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                Σ comment 0..1
+                Σ text before more 1..2
+                Σ code 2..3
+            "}
+        );
+    }
+
+    #[test]
+    fn typst_passages_and_paragraphs_are_bounded_by_summaries_and_chapters() {
+        let (text, outline) = typst_outline(indoc! {"
+            // Σ intro
+            Intro.
+
+            = One
+            /* Σ first */
+            First a.
+            First b.
+            // Σ second
+            Second.
+
+            Still second.
+            == Two
+            Unsummarised.
+        "});
+        assert_eq!(
+            passages(&outline),
+            [("intro", 0..3), ("first", 4..7), ("second", 7..11)]
+        );
+
+        let text = text.slice(..);
+        assert_eq!(outline.paragraph_at(text, 6), Some(5..7));
+        assert_eq!(summary_above(&outline, text, 6), Some("first"));
+        assert_eq!(outline.paragraph_at(text, 10), Some(10..11));
+        assert_eq!(summary_above(&outline, text, 10), None);
+        for line in [3, 4, 7, 11] {
+            assert_eq!(outline.paragraph_at(text, line), None);
+        }
+    }
+
+    #[test]
+    fn typst_summaries_are_entered_at_the_end_of_their_text() {
+        let (text, outline) =
+            typst_outline("// Σ Some text  \n//ΣTight\n// Σ\n/* Σ Block text */\n/* Σ */\n/*Σ*/\n");
+        assert_eq!(
+            entered_summaries(&text, &outline),
+            [
+                "// Σ Some text|  ",
+                "//ΣTight|",
+                "// Σ |",
+                "/* Σ Block text| */",
+                "/* Σ | */",
+                "/*Σ | */",
+            ]
+        );
     }
 }
