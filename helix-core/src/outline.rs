@@ -758,6 +758,41 @@ mod test {
     }
 
     #[test]
+    fn only_latex_line_comments_starting_with_the_marker_are_summaries() {
+        let (_, outline) = latex_outline(indoc! {r"
+            \section{Notes}
+            % Pass 1: read title and abstract
+            % A question about Σ
+            % ∑ n-ary summation is not the marker
+            \begin{verbatim}
+            % Σ sample code
+            \end{verbatim}
+            \begin{comment}
+            % Σ commented out
+            \end{comment}
+            \iffalse
+            % Σ skipped
+            \fi
+            % Σ The only summary
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h3 Notes 0..1
+                  Σ The only summary 13..14
+            "}
+        );
+    }
+
+    #[test]
+    fn latex_summaries_after_text_on_their_line_are_summaries() {
+        // The comment node covers only the comment, not its line, so the outline agrees with
+        // the highlight query, which can't see the text before the comment either.
+        let (_, outline) = latex_outline("Text. % Σ Trailing\n");
+        assert_eq!(render(&outline), "Σ Trailing 0..1\n");
+    }
+
+    #[test]
     fn languages_without_an_outline_query_have_no_outline() {
         let text = Rope::from_str("// Σ a comment\nfn main() {}\n");
         let language = LOADER.language_for_name("rust").unwrap();
