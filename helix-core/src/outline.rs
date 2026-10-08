@@ -409,8 +409,16 @@ mod test {
     static LOADER: Lazy<Loader> = Lazy::new(crate::config::default_lang_loader);
 
     fn markdown_outline(text: &str) -> (Rope, Outline) {
+        language_outline("markdown", text)
+    }
+
+    fn typst_outline(text: &str) -> (Rope, Outline) {
+        language_outline("typst", text)
+    }
+
+    fn language_outline(language: &str, text: &str) -> (Rope, Outline) {
         let text = Rope::from_str(text);
-        let language = LOADER.language_for_name("markdown").unwrap();
+        let language = LOADER.language_for_name(language).unwrap();
         let syntax = Syntax::new(text.slice(..), language, &LOADER).unwrap();
         let outline = Outline::new(text.slice(..), &syntax, &LOADER).unwrap();
         (text, outline)
@@ -774,5 +782,33 @@ mod test {
         assert_eq!(entry_text(0), Some("Title"));
         assert_eq!(entry_text(1), Some("first"));
         assert_eq!(entry_text(2), None);
+    }
+
+    #[test]
+    fn typst_headings_are_chapters_at_their_number_of_equals_signs() {
+        let (_, outline) = typst_outline(indoc! {"
+            == Two
+
+            === Three
+            ==== Four
+            ===== Five
+
+            ====== Six
+            == Two again
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h2 Two 0..1
+                  h3 Three 2..3
+                    h4 Four 3..4
+                      h5 Five 4..5
+                        h6 Six 6..7
+                h2 Two again 7..8
+            "}
+        );
+
+        let (_, outline) = typst_outline("= One\n== Two\n");
+        assert_eq!(render(&outline), "h1 One 0..1\n  h2 Two 1..2\n");
     }
 }
