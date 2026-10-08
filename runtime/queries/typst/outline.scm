@@ -1,6 +1,7 @@
 ; A heading's text is its nodes after the marker, apart from a trailing label. Each level has a
 ; pattern for headings without a trailing label, one for headings with one, and one for empty
-; headings.
+; headings. The patterns are repeated per level because a query can't derive the capture name,
+; and so the level, from the marker.
 
 ((heading "=" . (_)* @name . (_) @name @_last .) @chapter.1
  (#not-match? @_last "^<[^\\s<>]+>$"))
