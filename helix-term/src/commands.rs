@@ -4052,25 +4052,28 @@ fn open_above(cx: &mut Context) {
 /// Enters insert mode at the end of the summary of the paragraph under the cursor, first inserting
 /// an empty summary above the paragraph when it has none.
 fn add_summary(cx: &mut Context) {
-    let (view, doc) = current!(cx.editor);
-    let loader = cx.editor.syn_loader.load();
-    let text = doc.text().slice(..);
-    let Some(outline) = doc
-        .syntax()
-        .and_then(|syntax| outline::Outline::new(text, syntax, &loader))
-    else {
-        cx.editor
-            .set_error("No outline available for this buffer's language");
+    let Some(outline) = current_outline(cx.editor) else {
         return;
     };
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
     let line = text.char_to_line(doc.selection(view.id).primary().cursor(text));
     let paragraph = outline.paragraph_at(text, line);
     let summary = outline
         .entry_at_line(line)
         .or_else(|| outline.summary_above(paragraph.as_ref()?));
     let paragraph = match (summary.map(|summary| summary.kind), paragraph) {
-        (Some(outline::OutlineEntryKind::Summary { text_end }), _) => {
-            doc.set_selection(view.id, Selection::point(text_end));
+        (Some(outline::OutlineEntryKind::Summary { text_end, padding }), _) => {
+            let cursor = Selection::point(text_end + padding.before.len());
+            if padding == outline::SummaryPadding::default() {
+                doc.set_selection(view.id, cursor);
+            } else {
+                let padding = format!("{}{}", padding.before, padding.after);
+                let transaction =
+                    Transaction::insert(doc.text(), &Selection::point(text_end), padding.into())
+                        .with_selection(cursor);
+                doc.apply(&transaction, view.id);
+            }
             enter_insert_mode(cx);
             return;
         }
@@ -4080,8 +4083,7 @@ fn add_summary(cx: &mut Context) {
             return;
         }
     };
-    let Some((summary, text_offset)) = doc.language_config().and_then(outline::empty_summary)
-    else {
+    let Some(summary) = doc.language_config().and_then(outline::empty_summary) else {
         cx.editor
             .set_error("No comment syntax for this buffer's language");
         return;
@@ -4090,8 +4092,8 @@ fn add_summary(cx: &mut Context) {
     let line_start = text.line_to_char(paragraph.start);
     let first_line = text.line(paragraph.start);
     let indent = first_line.slice(..first_line.first_non_whitespace_char().unwrap_or(0));
-    let cursor = line_start + indent.len_chars() + text_offset;
-    let summary_line = format!("{indent}{summary}{}", doc.line_ending.as_str());
+    let cursor = line_start + indent.len_chars() + summary.text_offset;
+    let summary_line = format!("{indent}{}{}", summary.line, doc.line_ending.as_str());
     let transaction = Transaction::insert(
         doc.text(),
         &Selection::point(line_start),

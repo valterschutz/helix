@@ -2,8 +2,14 @@
 //!
 //! A language supports outlines when it has an `outline.scm` query. The query captures each
 //! heading as `@chapter.<level>` with the text to show as `@name`, and comments as `@comment`.
-//! Whether a comment is a summary is decided here from the language's comment tokens, so
-//! queries don't repeat the summary syntax.
+//! `@chapter.<level>` must capture the heading or title node, not a node that spans the whole
+//! chapter body such as LaTeX's `section`: the captured node's lines are the chapter entry's lines,
+//! which the picker jumps to and which are not part of any paragraph.
+//!
+//! Whether a captured comment is a summary is decided here from the language's comment tokens,
+//! so outline queries don't repeat the summary syntax. Highlight and injection queries can't call
+//! into Rust, so Markdown's `highlights.scm` and `injections.scm` repeat the summary pattern as a
+//! regex that must be kept in step with this module.
 
 use std::ops::Range;
 
@@ -13,7 +19,7 @@ use tree_house::tree_sitter::{
     Capture, Grammar, InactiveQueryCursor, Query, RopeInput,
 };
 
-use crate::line_ending::get_line_ending;
+use crate::line_ending::{get_line_ending, line_end_char_index};
 use crate::syntax::{config::LanguageConfiguration, Loader, Syntax, TREE_SITTER_MATCH_LIMIT};
 
 /// The character that marks a comment as a summary: U+03A3 GREEK CAPITAL LETTER SIGMA.
@@ -60,10 +66,20 @@ pub enum OutlineEntryKind {
         level: u8,
     },
     Summary {
-        /// The char index in the document just after the summary text, where editing the summary
-        /// resumes.
+        /// The char index in the document where editing the summary resumes: just after the
+        /// summary text, or where the text of an empty summary goes.
         text_end: usize,
+        /// Spaces to insert at `text_end` that lay out an empty summary like a new one from
+        /// [`empty_summary`], such as the space before `-->` in `<!-- Σ -->`.
+        padding: SummaryPadding,
     },
+}
+
+/// Spaces to insert before and after the cursor when editing a summary resumes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SummaryPadding {
+    pub before: &'static str,
+    pub after: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +92,19 @@ pub struct OutlineEntry {
     /// Indentation steps in the outline view. Chapters count from the shallowest heading level
     /// in the document, and summaries sit one step under the chapter they follow.
     pub depth: usize,
+}
+
+impl OutlineEntry {
+    pub fn is_summary(&self) -> bool {
+        matches!(self.kind, OutlineEntryKind::Summary { .. })
+    }
+
+    pub fn chapter_level(&self) -> Option<u8> {
+        match self.kind {
+            OutlineEntryKind::Chapter { level } => Some(level),
+            OutlineEntryKind::Summary { .. } => None,
+        }
+    }
 }
 
 /// A summary plus everything after it up to the next summary or chapter.
@@ -100,6 +129,15 @@ impl Outline {
         let language = syntax.root_language();
         let query = loader.outline_query(language)?;
         let config = loader.language(language).config();
+        Some(Self::from_query(text, syntax, query, config))
+    }
+
+    fn from_query(
+        text: RopeSlice,
+        syntax: &Syntax,
+        query: &OutlineQuery,
+        config: &LanguageConfiguration,
+    ) -> Self {
         let root = syntax.tree().root_node();
         let mut cursor = InactiveQueryCursor::new(0..u32::MAX, TREE_SITTER_MATCH_LIMIT)
             .execute_query(&query.query, &root, RopeInput::new(text));
@@ -111,7 +149,10 @@ impl Outline {
             let mut comment = None;
             for matched in mat.matched_nodes() {
                 let byte_range = matched.node.byte_range();
-                let byte_range = byte_range.start as usize..byte_range.end as usize;
+                let byte_range = without_continuation_prefix(
+                    text,
+                    byte_range.start as usize..byte_range.end as usize,
+                );
                 if let Some(level) = query.chapter_level(matched.capture) {
                     chapter = Some((level, byte_range));
                 } else if query.name_capture == Some(matched.capture) {
@@ -136,13 +177,17 @@ impl Outline {
                 if lines.len() != 1 {
                     continue;
                 }
-                let comment = text.byte_slice(byte_range.clone()).to_string();
+                // Trailing whitespace is kept, as an empty line comment summary's text goes after it.
+                let line_end = text.char_to_byte(line_end_char_index(&text, lines.start));
+                let comment = text
+                    .byte_slice(byte_range.start..byte_range.end.min(line_end))
+                    .to_string();
                 let comment_start = byte_range.start + comment.len() - comment.trim_start().len();
-                let comment = comment.trim();
-                if let Some(summary) = summary_text_range(comment, config) {
+                let comment = comment.trim_start();
+                if let Some((summary, padding)) = summary_text_range(comment, config) {
                     let text_end = text.byte_to_char(comment_start + summary.end);
                     entries.push(OutlineEntry {
-                        kind: OutlineEntryKind::Summary { text_end },
+                        kind: OutlineEntryKind::Summary { text_end, padding },
                         text: comment[summary].to_string(),
                         lines,
                         depth: 0,
@@ -154,28 +199,24 @@ impl Outline {
 
         let shallowest_level = entries
             .iter()
-            .filter_map(|entry| match entry.kind {
-                OutlineEntryKind::Chapter { level } => Some(level),
-                OutlineEntryKind::Summary { .. } => None,
-            })
+            .filter_map(OutlineEntry::chapter_level)
             .min()
             .unwrap_or_default();
         let mut summary_depth = 0;
         for entry in &mut entries {
-            match entry.kind {
-                OutlineEntryKind::Chapter { level } => {
-                    entry.depth = usize::from(level - shallowest_level);
-                    summary_depth = entry.depth + 1;
-                }
-                OutlineEntryKind::Summary { .. } => entry.depth = summary_depth,
+            if let Some(level) = entry.chapter_level() {
+                entry.depth = usize::from(level - shallowest_level);
+                summary_depth = entry.depth + 1;
+            } else {
+                entry.depth = summary_depth;
             }
         }
 
         let line_count = text.len_lines() - usize::from(get_line_ending(&text).is_some());
-        Some(Self {
+        Self {
             entries,
             line_count,
-        })
+        }
     }
 
     pub fn entries(&self) -> &[OutlineEntry] {
@@ -186,7 +227,7 @@ impl Outline {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| matches!(entry.kind, OutlineEntryKind::Summary { .. }))
+            .filter(|(_, entry)| entry.is_summary())
             .map(|(idx, summary)| {
                 let end = self
                     .entries
@@ -234,74 +275,118 @@ impl Outline {
     pub fn summary_above(&self, paragraph: &Range<usize>) -> Option<&OutlineEntry> {
         let line_above = paragraph.start.checked_sub(1)?;
         self.entry_at_line(line_above)
-            .filter(|entry| matches!(entry.kind, OutlineEntryKind::Summary { .. }))
+            .filter(|entry| entry.is_summary())
     }
 }
 
-/// An empty summary in the language's comment syntax, preferring line comments, and the char
-/// offset in it where the summary text goes. Returns `None` when the language has no comment
-/// tokens.
-pub fn empty_summary(config: &LanguageConfiguration) -> Option<(String, usize)> {
+/// An empty summary in the language's comment syntax.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmptySummary {
+    /// The summary line without indentation and line ending.
+    pub line: String,
+    /// The char offset in `line` where the summary text goes.
+    pub text_offset: usize,
+}
+
+/// An empty summary in the language's comment syntax, preferring line comments. Returns `None`
+/// when the language has no comment tokens.
+pub fn empty_summary(config: &LanguageConfiguration) -> Option<EmptySummary> {
     let line_comment = config.comment_tokens.iter().flatten().next();
     let block_comment = config.block_comment_tokens.iter().flatten().next();
-    let (summary, text_offset) = match (line_comment, block_comment) {
+    let summary = match (line_comment, block_comment) {
         (Some(token), _) => {
-            let summary = format!("{token} {SUMMARY_MARKER} ");
-            let text_offset = summary.chars().count();
-            (summary, text_offset)
+            let line = format!("{token} {SUMMARY_MARKER} ");
+            let text_offset = line.chars().count();
+            EmptySummary { line, text_offset }
         }
         (None, Some(token)) => {
             let opener = format!("{} {SUMMARY_MARKER} ", token.start);
             let text_offset = opener.chars().count();
-            (format!("{opener} {}", token.end), text_offset)
+            let line = format!("{opener} {}", token.end);
+            EmptySummary { line, text_offset }
         }
         (None, None) => return None,
     };
-    Some((summary, text_offset))
+    Some(summary)
 }
 
 /// Returns the byte range of the trimmed summary text in a single-line `comment` whose text, after
-/// the language's comment opener, starts with [`SUMMARY_MARKER`].
-fn summary_text_range(comment: &str, config: &LanguageConfiguration) -> Option<Range<usize>> {
-    let line_comment_texts = config
-        .comment_tokens
-        .iter()
-        .flatten()
-        .filter_map(|token| Some((token.len(), comment.strip_prefix(token.as_str())?)));
+/// the language's comment opener, starts with [`SUMMARY_MARKER`], and the padding that lays out an
+/// empty summary like a new one.
+fn summary_text_range(
+    comment: &str,
+    config: &LanguageConfiguration,
+) -> Option<(Range<usize>, SummaryPadding)> {
+    let line_comment_texts = config.comment_tokens.iter().flatten().filter_map(|token| {
+        let text = comment.strip_prefix(token.as_str())?;
+        Some((token.len(), text, false))
+    });
     let block_comment_texts = config
         .block_comment_tokens
         .iter()
         .flatten()
         .filter_map(|token| {
             let text = comment
+                .trim_end()
                 .strip_prefix(token.start.as_str())?
                 .strip_suffix(token.end.as_str())?;
-            Some((token.start.len(), text))
+            Some((token.start.len(), text, true))
         });
     line_comment_texts
         .chain(block_comment_texts)
-        .find_map(|(text_start, text)| {
+        .find_map(|(text_start, text, has_closer)| {
             let after_marker = text.trim_start().strip_prefix(SUMMARY_MARKER)?;
             let marker_end = text_start + text.len() - after_marker.len();
             let summary = after_marker.trim();
-            let summary_start = if summary.is_empty() {
-                // An empty summary's text goes after the space following the marker, which is
-                // where add-summary leaves the cursor in a new summary.
-                marker_end
-                    + after_marker
-                        .chars()
-                        .next()
-                        .filter(|ch| ch.is_whitespace())
-                        .map_or(0, char::len_utf8)
-            } else {
-                marker_end + after_marker.len() - after_marker.trim_start().len()
+            if !summary.is_empty() {
+                let summary_start =
+                    marker_end + after_marker.len() - after_marker.trim_start().len();
+                return Some((
+                    summary_start..summary_start + summary.len(),
+                    SummaryPadding::default(),
+                ));
+            }
+            // An empty summary's text goes after the space following the marker and, in a block
+            // comment, before a space ahead of the closer, as in a new summary.
+            let summary_start = marker_end + after_marker.chars().next().map_or(0, char::len_utf8);
+            let padding = SummaryPadding {
+                before: if after_marker.is_empty() { " " } else { "" },
+                after: if has_closer && after_marker.chars().count() < 2 {
+                    " "
+                } else {
+                    ""
+                },
             };
-            Some(summary_start..summary_start + summary.len())
+            Some((summary_start..summary_start, padding))
         })
 }
 
-/// The lines spanned by a node, ignoring trailing whitespace such as the line ending or a block
-/// continuation that some grammars include in the node.
+/// The byte range of a captured node without the next line's container prefix that some grammars
+/// include at its end, such as `> ` in a Markdown block quote or a list item's indentation. That
+/// prefix is the node's text after its last line ending when it is no wider than the text before
+/// the node on its first line, and only holds whitespace and characters of that text.
+fn without_continuation_prefix(text: RopeSlice, byte_range: Range<usize>) -> Range<usize> {
+    let start_line = text.byte_to_line(byte_range.start);
+    let last_line = text.byte_to_line(byte_range.end);
+    if last_line == start_line {
+        return byte_range;
+    }
+    let prefix = text.byte_slice(text.line_to_byte(start_line)..byte_range.start);
+    let last_line_start = text.line_to_byte(last_line);
+    let tail = text.byte_slice(last_line_start..byte_range.end);
+    let is_prefix = tail.len_chars() <= prefix.len_chars()
+        && tail
+            .chars()
+            .all(|ch| ch.is_whitespace() || prefix.chars().any(|prefix_ch| prefix_ch == ch));
+    if is_prefix {
+        byte_range.start..last_line_start
+    } else {
+        byte_range
+    }
+}
+
+/// The lines spanned by a node, ignoring trailing whitespace such as the line ending that some
+/// grammars include in the node.
 fn line_range(text: RopeSlice, byte_range: Range<usize>) -> Range<usize> {
     let start = byte_range.start;
     let node_text = text.byte_slice(byte_range).to_string();
@@ -336,9 +421,9 @@ mod test {
     fn render(outline: &Outline) -> String {
         let mut out = String::new();
         for entry in outline.entries() {
-            let marker = match entry.kind {
-                OutlineEntryKind::Chapter { level } => format!("h{level}"),
-                OutlineEntryKind::Summary { .. } => "Σ".to_string(),
+            let marker = match entry.chapter_level() {
+                Some(level) => format!("h{level}"),
+                None => "Σ".to_string(),
             };
             let indent = "  ".repeat(entry.depth);
             writeln!(out, "{indent}{marker} {} {:?}", entry.text, entry.lines).unwrap();
@@ -455,22 +540,158 @@ mod test {
     }
 
     #[test]
+    fn summaries_in_block_quotes_and_list_items_are_summaries() {
+        let (text, outline) = markdown_outline(indoc! {"
+            > <!-- Σ Quoted -->
+            > More.
+
+            > > <!-- Σ Nested -->
+            > > More.
+
+            >   <!-- Σ Indented -->
+            >   More.
+
+            - <!-- Σ Listed -->
+              More.
+
+            > - <!-- Σ Quoted and listed -->
+            >   More.
+
+            > <!-- Σ -->
+            > More.
+
+            > <!-- Σ a summary
+            > that spans two lines -->
+            > More.
+
+            > # Quoted chapter
+            > More.
+
+            > Quoted setext chapter
+            > ---
+            > More.
+
+            - # Listed chapter
+              More.
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                Σ Quoted 0..1
+                Σ Nested 3..4
+                Σ Indented 6..7
+                Σ Listed 9..10
+                Σ Quoted and listed 12..13
+                Σ  15..16
+                h1 Quoted chapter 22..23
+                  h2 Quoted setext chapter 25..27
+                h1 Listed chapter 29..30
+            "}
+        );
+        assert_eq!(
+            entered_summaries(&text, &outline)
+                .last()
+                .map(String::as_str),
+            Some("> <!-- Σ | -->")
+        );
+        let text = text.slice(..);
+        for line in [1, 23, 27, 30] {
+            assert_eq!(outline.paragraph_at(text, line), Some(line..line + 1));
+        }
+    }
+
+    #[test]
     fn empty_summaries_use_the_language_comment_syntax_preferring_line_comments() {
         let empty_summary = |language| {
             let language = LOADER.language_for_name(language).unwrap();
-            let (summary, text_offset) = super::empty_summary(LOADER.language(language).config())?;
-            let text_start = summary
+            let EmptySummary { line, text_offset } =
+                super::empty_summary(LOADER.language(language).config())?;
+            let text_start = line
                 .char_indices()
                 .map(|(idx, _)| idx)
-                .chain([summary.len()])
+                .chain([line.len()])
                 .nth(text_offset)?;
-            let (before, after) = summary.split_at(text_start);
+            let (before, after) = line.split_at(text_start);
             Some(format!("{before}|{after}"))
         };
         assert_eq!(empty_summary("markdown").as_deref(), Some("<!-- Σ | -->"));
         assert_eq!(empty_summary("latex").as_deref(), Some("% Σ |"));
         assert_eq!(empty_summary("typst").as_deref(), Some("// Σ |"));
         assert_eq!(empty_summary("json"), None);
+    }
+
+    /// The line of each summary as editing it resumes, with `|` at the cursor and the summary's
+    /// padding inserted.
+    fn entered_summaries(text: &Rope, outline: &Outline) -> Vec<String> {
+        let text = text.slice(..);
+        outline
+            .entries()
+            .iter()
+            .filter_map(|entry| {
+                let OutlineEntryKind::Summary { text_end, padding } = entry.kind else {
+                    return None;
+                };
+                let line = entry.lines.start;
+                let line_end = text.line_to_char(line) + text.line(line).len_chars();
+                let line_end = line_end - get_line_ending(&text.line(line)).map_or(0, |_| 1);
+                Some(format!(
+                    "{}{}|{}{}",
+                    text.slice(text.line_to_char(line)..text_end),
+                    padding.before,
+                    padding.after,
+                    text.slice(text_end..line_end),
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn summaries_are_entered_at_the_end_of_their_text() {
+        let (text, outline) = markdown_outline(indoc! {"
+            <!-- Σ Some text   -->
+            <!--ΣTight-->
+            <!-- Σ  -->
+            <!-- Σ -->
+            <!--Σ-->
+            <!-- Σ     -->
+        "});
+        assert_eq!(
+            entered_summaries(&text, &outline),
+            [
+                "<!-- Σ Some text|   -->",
+                "<!--ΣTight|-->",
+                "<!-- Σ | -->",
+                "<!-- Σ | -->",
+                "<!--Σ | -->",
+                "<!-- Σ |    -->",
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comment_summaries_are_entered_at_the_end_of_their_text() {
+        // No LaTeX outline query exists yet, so this one only captures comments.
+        let text = Rope::from_str("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
+        let language = LOADER.language_for_name("latex").unwrap();
+        let syntax = Syntax::new(text.slice(..), language, &LOADER).unwrap();
+        let query = OutlineQuery::new(
+            syntax.tree().root_node().grammar(),
+            "(line_comment) @comment",
+        )
+        .unwrap();
+        let config = LOADER.language(language).config();
+        let outline = Outline::from_query(text.slice(..), &syntax, &query, config);
+        assert_eq!(
+            entered_summaries(&text, &outline),
+            [
+                "% Σ Some text|  ",
+                "%ΣTight|",
+                "% Σ |",
+                "% Σ |",
+                "%Σ |",
+                "% Σ |  ",
+            ]
+        );
     }
 
     #[test]
