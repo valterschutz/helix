@@ -52,6 +52,9 @@
 (tagged field: (ident) @tag)
 (field field: (ident) @tag)
 (comment) @comment
+; A summary is a single-line comment whose text starts with `Σ`.
+((comment) @comment.summary
+ (#match? @comment.summary "^(//[ \t]*Σ[^\n]*|/[*][ \t]*Σ[^\n]*[*]/)$"))
 
 ; MARKUP
 (item "-" @markup.list)
