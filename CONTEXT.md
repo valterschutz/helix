@@ -43,7 +43,7 @@ A part of a prose document introduced by a heading, at any heading level.
 _Avoid_: Section, symbol
 
 **Summary**:
-A one-line comment marked with `§` that states what the passage below it says. It is not part of the prose.
+A one-line comment marked with `Σ` that states what the passage below it says. It is not part of the prose.
 _Avoid_: Topic sentence, gist, annotation
 
 **Passage**:
