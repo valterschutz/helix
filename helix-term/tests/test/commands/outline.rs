@@ -47,6 +47,33 @@ async fn outline_picker_jumps_to_the_chosen_summary() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn outline_picker_lists_an_empty_summary_as_a_placeholder() -> anyhow::Result<()> {
+    test_with_config(
+        AppBuilder::new().with_config(config_with_key("F2", MappableCommand::outline_picker)),
+        (
+            indoc! {"\
+                #[#|]# Title
+                <!-- Σ The first passage -->
+                First.
+
+                <!-- Σ -->
+                Second.
+            "},
+            ":lang markdown<ret><F2>(empty summary)<ret>",
+            indoc! {"\
+                # Title
+                <!-- Σ The first passage -->
+                First.
+
+                #[<|]#!-- Σ -->
+                Second.
+            "},
+        ),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn outline_picker_reports_languages_without_outline_support() -> anyhow::Result<()> {
     test_key_sequence(
         &mut AppBuilder::new()
