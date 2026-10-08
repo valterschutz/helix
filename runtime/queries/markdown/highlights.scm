@@ -60,3 +60,8 @@
 (pipe_table_header
   "|" @punctuation.special)
 (pipe_table_delimiter_row) @punctuation.special
+
+; A summary is a single-line HTML comment whose text starts with `Σ`. Inside a list item or
+; block quote the html_block also spans the next line's continuation prefix.
+((html_block) @comment.summary
+ (#match? @comment.summary "^[ \t]*<!--[ \t]*Σ[^\n]*-->[ \t]*\r?(\n[ \t>]*)?$"))

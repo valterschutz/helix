@@ -204,6 +204,7 @@ We use a similar set of scopes as
     - `documentation` - Line documentation comments (e.g. `///` in Rust)
   - `block` - Block comments (e.g. (`/* */`)
     - `documentation` - Block documentation comments (e.g. `/** */` in Rust)
+  - `summary` - Summaries in prose (e.g. `<!-- Σ … -->` in Markdown)
   - `unused` - Unused variables and patterns, e.g. `_` and `_foo`
 
 - `variable` - Variables
