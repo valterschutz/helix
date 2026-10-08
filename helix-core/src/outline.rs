@@ -2,6 +2,8 @@
 //!
 //! A language supports outlines when it has an `outline.scm` query. The query captures each
 //! heading as `@chapter.<level>` with the text to show as `@name`, and comments as `@comment`.
+//! `@name` may capture several nodes, such as the text and markup in a Typst heading, and then
+//! spans from the first to the last of them.
 //! `@chapter.<level>` must capture the heading or title node, not a node that spans the whole
 //! chapter body such as LaTeX's `section`: the captured node's lines are the chapter entry's lines,
 //! which the picker jumps to and which are not part of any paragraph.
@@ -156,7 +158,10 @@ impl Outline {
                 if let Some(level) = query.chapter_level(matched.capture) {
                     chapter = Some((level, byte_range));
                 } else if query.name_capture == Some(matched.capture) {
-                    name = Some(byte_range);
+                    name = Some(match name {
+                        Some(Range { start, .. }) => start..byte_range.end,
+                        None => byte_range,
+                    });
                 } else if query.comment_capture == Some(matched.capture) {
                     comment = Some(byte_range);
                 }
@@ -810,5 +815,25 @@ mod test {
 
         let (_, outline) = typst_outline("= One\n== Two\n");
         assert_eq!(render(&outline), "h1 One 0..1\n  h2 Two 1..2\n");
+    }
+
+    #[test]
+    fn typst_chapter_names_span_the_heading_markup_without_its_label() {
+        // A Typst heading has no single node for its text, so `@name` captures several nodes.
+        let (_, outline) = typst_outline(indoc! {"
+            = The *main*   result <intro>
+            == `code` and $x$ math
+            === Plain <plain>
+            ====
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h1 The *main* result 0..1
+                  h2 `code` and $x$ math 1..2
+                    h3 Plain 2..3
+                      h4  3..4
+            "}
+        );
     }
 }
