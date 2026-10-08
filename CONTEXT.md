@@ -46,5 +46,8 @@ _Avoid_: Topic sentence
 A summary plus everything after it up to the next summary or chapter.
 _Avoid_: Paragraph
 
+**Paragraph**:
+A contiguous run of non-blank lines, not counting chapter and summary lines. A passage may contain several. Add-summary works on the paragraph under the cursor.
+
 **Outline**:
 The document's chapters and summaries in document order, with each chapter indented by heading level and each summary one step under its chapter.
