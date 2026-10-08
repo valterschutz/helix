@@ -13,7 +13,7 @@ use tree_house::tree_sitter::{
     Capture, Grammar, InactiveQueryCursor, Query, RopeInput,
 };
 
-use crate::line_ending::get_line_ending;
+use crate::line_ending::{get_line_ending, line_end_char_index};
 use crate::syntax::{config::LanguageConfiguration, Loader, Syntax, TREE_SITTER_MATCH_LIMIT};
 
 /// The character that marks a comment as a summary: U+03A3 GREEK CAPITAL LETTER SIGMA.
@@ -130,7 +130,10 @@ impl Outline {
             let mut comment = None;
             for matched in mat.matched_nodes() {
                 let byte_range = matched.node.byte_range();
-                let byte_range = byte_range.start as usize..byte_range.end as usize;
+                let byte_range = without_continuation_prefix(
+                    text,
+                    byte_range.start as usize..byte_range.end as usize,
+                );
                 if let Some(level) = query.chapter_level(matched.capture) {
                     chapter = Some((level, byte_range));
                 } else if query.name_capture == Some(matched.capture) {
@@ -155,10 +158,13 @@ impl Outline {
                 if lines.len() != 1 {
                     continue;
                 }
-                let comment = text.byte_slice(byte_range.clone()).to_string();
-                let comment_start = byte_range.start + comment.len() - comment.trim_start().len();
                 // Trailing whitespace is kept, as an empty line comment summary's text goes after it.
-                let comment = comment.trim_start().lines().next().unwrap_or_default();
+                let line_end = text.char_to_byte(line_end_char_index(&text, lines.start));
+                let comment = text
+                    .byte_slice(byte_range.start..byte_range.end.min(line_end))
+                    .to_string();
+                let comment_start = byte_range.start + comment.len() - comment.trim_start().len();
+                let comment = comment.trim_start();
                 if let Some((summary, padding)) = summary_text_range(comment, config) {
                     let text_end = text.byte_to_char(comment_start + summary.end);
                     entries.push(OutlineEntry {
@@ -331,8 +337,32 @@ fn summary_text_range(
         })
 }
 
-/// The lines spanned by a node, ignoring trailing whitespace such as the line ending or a block
-/// continuation that some grammars include in the node.
+/// The byte range of a captured node without the next line's container prefix that some grammars
+/// include at its end, such as `> ` in a Markdown block quote or a list item's indentation. That
+/// prefix is the node's text after its last line ending when it is no wider than the text before
+/// the node on its first line, and only holds whitespace and characters of that text.
+fn without_continuation_prefix(text: RopeSlice, byte_range: Range<usize>) -> Range<usize> {
+    let start_line = text.byte_to_line(byte_range.start);
+    let last_line = text.byte_to_line(byte_range.end);
+    if last_line == start_line {
+        return byte_range;
+    }
+    let prefix = text.byte_slice(text.line_to_byte(start_line)..byte_range.start);
+    let last_line_start = text.line_to_byte(last_line);
+    let tail = text.byte_slice(last_line_start..byte_range.end);
+    let is_prefix = tail.len_chars() <= prefix.len_chars()
+        && tail
+            .chars()
+            .all(|ch| ch.is_whitespace() || prefix.chars().any(|prefix_ch| prefix_ch == ch));
+    if is_prefix {
+        byte_range.start..last_line_start
+    } else {
+        byte_range
+    }
+}
+
+/// The lines spanned by a node, ignoring trailing whitespace such as the line ending that some
+/// grammars include in the node.
 fn line_range(text: RopeSlice, byte_range: Range<usize>) -> Range<usize> {
     let start = byte_range.start;
     let node_text = text.byte_slice(byte_range).to_string();
@@ -483,6 +513,67 @@ mod test {
                   Σ The only summary 15..16
             "}
         );
+    }
+
+    #[test]
+    fn summaries_in_block_quotes_and_list_items_are_summaries() {
+        let (text, outline) = markdown_outline(indoc! {"
+            > <!-- Σ Quoted -->
+            > More.
+
+            > > <!-- Σ Nested -->
+            > > More.
+
+            >   <!-- Σ Indented -->
+            >   More.
+
+            - <!-- Σ Listed -->
+              More.
+
+            > - <!-- Σ Quoted and listed -->
+            >   More.
+
+            > <!-- Σ -->
+            > More.
+
+            > <!-- Σ a summary
+            > that spans two lines -->
+            > More.
+
+            > # Quoted chapter
+            > More.
+
+            > Quoted setext chapter
+            > ---
+            > More.
+
+            - # Listed chapter
+              More.
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                Σ Quoted 0..1
+                Σ Nested 3..4
+                Σ Indented 6..7
+                Σ Listed 9..10
+                Σ Quoted and listed 12..13
+                Σ  15..16
+                h1 Quoted chapter 22..23
+                  h2 Quoted setext chapter 25..27
+                h1 Listed chapter 29..30
+            "}
+        );
+        assert_eq!(
+            entered_summaries(&text, &outline)
+                .last()
+                .map(String::as_str),
+            Some("> <!-- Σ | -->")
+        );
+        let text = text.slice(..);
+        for line in [1, 23, 27, 30] {
+            assert_eq!(outline.paragraph_at(text, line), Some(line..line + 1));
+        }
     }
 
     #[test]

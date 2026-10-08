@@ -164,6 +164,23 @@ async fn add_summary_moves_into_the_existing_summary_above_the_paragraph() -> an
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn add_summary_moves_into_the_summary_above_a_paragraph_in_a_block_quote(
+) -> anyhow::Result<()> {
+    test_add_summary((
+        indoc! {"\
+            > <!-- Σ Quoted -->
+            > Quoted #[t|]#ext.
+        "},
+        ":lang markdown<ret><F3>",
+        indoc! {"\
+            > <!-- Σ Quoted#[ |]#-->
+            > Quoted text.
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn add_summary_on_a_summary_line_moves_into_that_summary() -> anyhow::Result<()> {
     test_add_summary((
         indoc! {"\
