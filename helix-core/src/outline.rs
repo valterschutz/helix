@@ -308,8 +308,8 @@ pub fn empty_summary(config: &LanguageConfiguration) -> Option<EmptySummary> {
 }
 
 /// Returns the byte range of the trimmed summary text in a single-line `comment` whose text, after
-/// the language's comment opener, starts with [`SUMMARY_MARKER`], and the padding that lays out an
-/// empty summary like a new one.
+/// the language's comment opener and any spaces or tabs, starts with [`SUMMARY_MARKER`], and the
+/// padding that lays out an empty summary like a new one.
 fn summary_text_range(
     comment: &str,
     config: &LanguageConfiguration,
@@ -332,7 +332,9 @@ fn summary_text_range(
     line_comment_texts
         .chain(block_comment_texts)
         .find_map(|(text_start, text, has_closer)| {
-            let after_marker = text.trim_start().strip_prefix(SUMMARY_MARKER)?;
+            let after_marker = text
+                .trim_start_matches([' ', '\t'])
+                .strip_prefix(SUMMARY_MARKER)?;
             let marker_end = text_start + text.len() - after_marker.len();
             let summary = after_marker.trim();
             if !summary.is_empty() {
@@ -546,6 +548,18 @@ mod test {
                   Σ The only summary 15..16
             "}
         );
+    }
+
+    #[test]
+    fn only_spaces_and_tabs_may_separate_the_comment_opener_from_the_marker() {
+        // The highlight queries allow only `[ \t]` there, and the outline agrees with them.
+        let (_, outline) = markdown_outline("<!--\tΣ Tab -->\n\n<!--\u{a0}Σ No-break space -->\n");
+        assert_eq!(render(&outline), "Σ Tab 0..1\n");
+        let (_, outline) = latex_outline("%\tΣ Tab\n%\u{a0}Σ No-break space\n");
+        assert_eq!(render(&outline), "Σ Tab 0..1\n");
+        let (_, outline) =
+            typst_outline("//\tΣ Tab\n//\u{a0}Σ No-break space\n/*\u{a0}Σ No-break space */\n");
+        assert_eq!(render(&outline), "Σ Tab 0..1\n");
     }
 
     #[test]
