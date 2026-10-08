@@ -56,8 +56,14 @@ impl OutlineQuery {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutlineEntryKind {
-    Chapter { level: u8 },
-    Summary,
+    Chapter {
+        level: u8,
+    },
+    Summary {
+        /// The char index in the document just after the summary text, where editing the summary
+        /// resumes.
+        text_end: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,11 +136,14 @@ impl Outline {
                 if lines.len() != 1 {
                     continue;
                 }
-                let comment = text.byte_slice(byte_range).to_string();
-                if let Some(summary) = summary_text(comment.trim(), config) {
+                let comment = text.byte_slice(byte_range.clone()).to_string();
+                let comment_start = byte_range.start + comment.len() - comment.trim_start().len();
+                let comment = comment.trim();
+                if let Some(summary) = summary_text_range(comment, config) {
+                    let text_end = text.byte_to_char(comment_start + summary.end);
                     entries.push(OutlineEntry {
-                        kind: OutlineEntryKind::Summary,
-                        text: summary.to_string(),
+                        kind: OutlineEntryKind::Summary { text_end },
+                        text: comment[summary].to_string(),
                         lines,
                         depth: 0,
                     });
@@ -147,7 +156,7 @@ impl Outline {
             .iter()
             .filter_map(|entry| match entry.kind {
                 OutlineEntryKind::Chapter { level } => Some(level),
-                OutlineEntryKind::Summary => None,
+                OutlineEntryKind::Summary { .. } => None,
             })
             .min()
             .unwrap_or_default();
@@ -158,7 +167,7 @@ impl Outline {
                     entry.depth = usize::from(level - shallowest_level);
                     summary_depth = entry.depth + 1;
                 }
-                OutlineEntryKind::Summary => entry.depth = summary_depth,
+                OutlineEntryKind::Summary { .. } => entry.depth = summary_depth,
             }
         }
 
@@ -177,7 +186,7 @@ impl Outline {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| entry.kind == OutlineEntryKind::Summary)
+            .filter(|(_, entry)| matches!(entry.kind, OutlineEntryKind::Summary { .. }))
             .map(|(idx, summary)| {
                 let end = self
                     .entries
@@ -225,30 +234,70 @@ impl Outline {
     pub fn summary_above(&self, paragraph: &Range<usize>) -> Option<&OutlineEntry> {
         let line_above = paragraph.start.checked_sub(1)?;
         self.entry_at_line(line_above)
-            .filter(|entry| entry.kind == OutlineEntryKind::Summary)
+            .filter(|entry| matches!(entry.kind, OutlineEntryKind::Summary { .. }))
     }
 }
 
-/// Returns the summary text of a single-line `comment` whose text, after the language's comment
-/// opener, starts with [`SUMMARY_MARKER`].
-fn summary_text<'a>(comment: &'a str, config: &LanguageConfiguration) -> Option<&'a str> {
+/// An empty summary in the language's comment syntax, preferring line comments, and the char
+/// offset in it where the summary text goes. Returns `None` when the language has no comment
+/// tokens.
+pub fn empty_summary(config: &LanguageConfiguration) -> Option<(String, usize)> {
+    let line_comment = config.comment_tokens.iter().flatten().next();
+    let block_comment = config.block_comment_tokens.iter().flatten().next();
+    let (summary, text_offset) = match (line_comment, block_comment) {
+        (Some(token), _) => {
+            let summary = format!("{token} {SUMMARY_MARKER} ");
+            let text_offset = summary.chars().count();
+            (summary, text_offset)
+        }
+        (None, Some(token)) => {
+            let opener = format!("{} {SUMMARY_MARKER} ", token.start);
+            let text_offset = opener.chars().count();
+            (format!("{opener} {}", token.end), text_offset)
+        }
+        (None, None) => return None,
+    };
+    Some((summary, text_offset))
+}
+
+/// Returns the byte range of the trimmed summary text in a single-line `comment` whose text, after
+/// the language's comment opener, starts with [`SUMMARY_MARKER`].
+fn summary_text_range(comment: &str, config: &LanguageConfiguration) -> Option<Range<usize>> {
     let line_comment_texts = config
         .comment_tokens
         .iter()
         .flatten()
-        .filter_map(|token| comment.strip_prefix(token.as_str()));
+        .filter_map(|token| Some((token.len(), comment.strip_prefix(token.as_str())?)));
     let block_comment_texts = config
         .block_comment_tokens
         .iter()
         .flatten()
         .filter_map(|token| {
-            comment
+            let text = comment
                 .strip_prefix(token.start.as_str())?
-                .strip_suffix(token.end.as_str())
+                .strip_suffix(token.end.as_str())?;
+            Some((token.start.len(), text))
         });
     line_comment_texts
         .chain(block_comment_texts)
-        .find_map(|text| Some(text.trim_start().strip_prefix(SUMMARY_MARKER)?.trim()))
+        .find_map(|(text_start, text)| {
+            let after_marker = text.trim_start().strip_prefix(SUMMARY_MARKER)?;
+            let marker_end = text_start + text.len() - after_marker.len();
+            let summary = after_marker.trim();
+            let summary_start = if summary.is_empty() {
+                // An empty summary's text goes after the space following the marker, which is
+                // where add-summary leaves the cursor in a new summary.
+                marker_end
+                    + after_marker
+                        .chars()
+                        .next()
+                        .filter(|ch| ch.is_whitespace())
+                        .map_or(0, char::len_utf8)
+            } else {
+                marker_end + after_marker.len() - after_marker.trim_start().len()
+            };
+            Some(summary_start..summary_start + summary.len())
+        })
 }
 
 /// The lines spanned by a node, ignoring trailing whitespace such as the line ending or a block
@@ -289,7 +338,7 @@ mod test {
         for entry in outline.entries() {
             let marker = match entry.kind {
                 OutlineEntryKind::Chapter { level } => format!("h{level}"),
-                OutlineEntryKind::Summary => "Σ".to_string(),
+                OutlineEntryKind::Summary { .. } => "Σ".to_string(),
             };
             let indent = "  ".repeat(entry.depth);
             writeln!(out, "{indent}{marker} {} {:?}", entry.text, entry.lines).unwrap();
@@ -403,6 +452,25 @@ mod test {
                   Σ The only summary 15..16
             "}
         );
+    }
+
+    #[test]
+    fn empty_summaries_use_the_language_comment_syntax_preferring_line_comments() {
+        let empty_summary = |language| {
+            let language = LOADER.language_for_name(language).unwrap();
+            let (summary, text_offset) = super::empty_summary(LOADER.language(language).config())?;
+            let text_start = summary
+                .char_indices()
+                .map(|(idx, _)| idx)
+                .chain([summary.len()])
+                .nth(text_offset)?;
+            let (before, after) = summary.split_at(text_start);
+            Some(format!("{before}|{after}"))
+        };
+        assert_eq!(empty_summary("markdown").as_deref(), Some("<!-- Σ | -->"));
+        assert_eq!(empty_summary("latex").as_deref(), Some("% Σ |"));
+        assert_eq!(empty_summary("typst").as_deref(), Some("// Σ |"));
+        assert_eq!(empty_summary("json"), None);
     }
 
     #[test]
