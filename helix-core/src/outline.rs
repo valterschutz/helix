@@ -409,8 +409,16 @@ mod test {
     static LOADER: Lazy<Loader> = Lazy::new(crate::config::default_lang_loader);
 
     fn markdown_outline(text: &str) -> (Rope, Outline) {
+        outline("markdown", text)
+    }
+
+    fn latex_outline(text: &str) -> (Rope, Outline) {
+        outline("latex", text)
+    }
+
+    fn outline(language: &str, text: &str) -> (Rope, Outline) {
         let text = Rope::from_str(text);
-        let language = LOADER.language_for_name("markdown").unwrap();
+        let language = LOADER.language_for_name(language).unwrap();
         let syntax = Syntax::new(text.slice(..), language, &LOADER).unwrap();
         let outline = Outline::new(text.slice(..), &syntax, &LOADER).unwrap();
         (text, outline)
@@ -692,6 +700,40 @@ mod test {
                 "% Σ |  ",
             ]
         );
+    }
+
+    #[test]
+    fn latex_sectioning_commands_are_chapters_at_successive_levels() {
+        let (_, outline) = latex_outline(indoc! {r"
+            \documentclass{book}
+            \begin{document}
+            \part{One}
+            \chapter{Two}
+            \section{Three}
+            Text.
+            \subsection*{Four}
+            \subsubsection{Five}
+            \paragraph{Six}
+            \subparagraph*{Seven}
+            \chapter*{Two again}
+            \end{document}
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h1 One 2..3
+                  h2 Two 3..4
+                    h3 Three 4..5
+                      h4 Four 6..7
+                        h5 Five 7..8
+                          h6 Six 8..9
+                            h7 Seven 9..10
+                  h2 Two again 10..11
+            "}
+        );
+
+        let (_, outline) = latex_outline("\\section{One}\n\\subsection{Two}\n");
+        assert_eq!(render(&outline), "h3 One 0..1\n  h4 Two 1..2\n");
     }
 
     #[test]
