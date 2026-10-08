@@ -913,4 +913,61 @@ mod test {
             "}
         );
     }
+
+    #[test]
+    fn typst_passages_and_paragraphs_are_bounded_by_summaries_and_chapters() {
+        let (text, outline) = typst_outline(indoc! {"
+            // Σ intro
+            Intro.
+
+            = One
+            /* Σ first */
+            First a.
+            First b.
+            // Σ second
+            Second.
+
+            Still second.
+            == Two
+            Unsummarised.
+        "});
+        let passages: Vec<_> = outline
+            .passages()
+            .map(|passage| (passage.summary.text.as_str(), passage.lines))
+            .collect();
+        assert_eq!(
+            passages,
+            [("intro", 0..3), ("first", 4..7), ("second", 7..11)]
+        );
+
+        let text = text.slice(..);
+        let summary_above = |line| {
+            let paragraph = outline.paragraph_at(text, line)?;
+            Some(outline.summary_above(&paragraph)?.text.as_str())
+        };
+        assert_eq!(outline.paragraph_at(text, 6), Some(5..7));
+        assert_eq!(summary_above(6), Some("first"));
+        assert_eq!(outline.paragraph_at(text, 10), Some(10..11));
+        assert_eq!(summary_above(10), None);
+        for line in [3, 4, 7, 11] {
+            assert_eq!(outline.paragraph_at(text, line), None);
+        }
+    }
+
+    #[test]
+    fn typst_summaries_are_entered_at_the_end_of_their_text() {
+        let (text, outline) =
+            typst_outline("// Σ Some text  \n//ΣTight\n// Σ\n/* Σ Block text */\n/* Σ */\n/*Σ*/\n");
+        assert_eq!(
+            entered_summaries(&text, &outline),
+            [
+                "// Σ Some text|  ",
+                "//ΣTight|",
+                "// Σ |",
+                "/* Σ Block text| */",
+                "/* Σ | */",
+                "/*Σ | */",
+            ]
+        );
+    }
 }
