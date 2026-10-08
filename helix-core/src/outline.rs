@@ -814,6 +814,12 @@ mod test {
     }
 
     #[test]
+    fn latex_chapter_titles_with_math_are_shown_whole() {
+        let (_, outline) = latex_outline("\\section{The $x$ case}\n");
+        assert_eq!(render(&outline), "h3 The $x$ case 0..1\n");
+    }
+
+    #[test]
     fn latex_passages_and_paragraphs_are_bounded_by_summaries_and_chapters() {
         let (text, outline) = latex_outline(indoc! {r"
             % Σ intro
