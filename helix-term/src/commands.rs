@@ -33,7 +33,7 @@ use helix_core::{
     line_ending::{get_line_ending_of_str, line_end_char_index},
     match_brackets,
     movement::{self, move_vertically_visual, Direction},
-    object, pos_at_coords,
+    object, outline, pos_at_coords,
     regex::{self, Regex},
     search::{self},
     selection, surround,
@@ -414,6 +414,7 @@ impl MappableCommand {
         syntax_symbol_picker, "Open symbol picker from syntax information",
         lsp_or_syntax_symbol_picker, "Open symbol picker from LSP or syntax information",
         outline_picker, "Open outline picker of chapters and summaries",
+        add_summary, "Add or edit the summary of the paragraph under the cursor",
         changed_file_picker, "Open changed file picker",
         select_references_to_symbol_under_cursor, "Select symbol references",
         workspace_symbol_picker, "Open workspace symbol picker",
@@ -4046,6 +4047,59 @@ fn open_below(cx: &mut Context) {
 // O inserts a new line before each line with a selection
 fn open_above(cx: &mut Context) {
     open(cx, Open::Above, CommentContinuation::Enabled)
+}
+
+/// Enters insert mode at the end of the summary of the paragraph under the cursor, first inserting
+/// an empty summary above the paragraph when it has none.
+fn add_summary(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    let loader = cx.editor.syn_loader.load();
+    let text = doc.text().slice(..);
+    let Some(outline) = doc
+        .syntax()
+        .and_then(|syntax| outline::Outline::new(text, syntax, &loader))
+    else {
+        cx.editor
+            .set_error("No outline available for this buffer's language");
+        return;
+    };
+    let line = text.char_to_line(doc.selection(view.id).primary().cursor(text));
+    let paragraph = outline.paragraph_at(text, line);
+    let summary = outline
+        .entry_at_line(line)
+        .or_else(|| outline.summary_above(paragraph.as_ref()?));
+    let paragraph = match (summary.map(|summary| summary.kind), paragraph) {
+        (Some(outline::OutlineEntryKind::Summary { text_end }), _) => {
+            doc.set_selection(view.id, Selection::point(text_end));
+            enter_insert_mode(cx);
+            return;
+        }
+        (None, Some(paragraph)) => paragraph,
+        _ => {
+            cx.editor.set_error("No paragraph under the cursor");
+            return;
+        }
+    };
+    let Some((summary, text_offset)) = doc.language_config().and_then(outline::empty_summary)
+    else {
+        cx.editor
+            .set_error("No comment syntax for this buffer's language");
+        return;
+    };
+
+    let line_start = text.line_to_char(paragraph.start);
+    let first_line = text.line(paragraph.start);
+    let indent = first_line.slice(..first_line.first_non_whitespace_char().unwrap_or(0));
+    let cursor = line_start + indent.len_chars() + text_offset;
+    let summary_line = format!("{indent}{summary}{}", doc.line_ending.as_str());
+    let transaction = Transaction::insert(
+        doc.text(),
+        &Selection::point(line_start),
+        summary_line.into(),
+    )
+    .with_selection(Selection::point(cursor));
+    doc.apply(&transaction, view.id);
+    enter_insert_mode(cx);
 }
 
 fn normal_mode(cx: &mut Context) {
