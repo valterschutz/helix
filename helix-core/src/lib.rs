@@ -21,6 +21,7 @@ pub mod macros;
 pub mod match_brackets;
 pub mod movement;
 pub mod object;
+pub mod outline;
 mod position;
 pub mod search;
 pub mod selection;

@@ -28,7 +28,7 @@ use tree_house::{
     Error, InjectionLanguageMarker, LanguageConfig as SyntaxConfig, Layer,
 };
 
-use crate::{indent::IndentQuery, tree_sitter, ChangeSet, Language};
+use crate::{indent::IndentQuery, outline::OutlineQuery, tree_sitter, ChangeSet, Language};
 
 pub use tree_house::{
     highlighter::{Highlight, HighlightEvent},
@@ -43,6 +43,7 @@ pub struct LanguageData {
     indent_query: OnceCell<Option<IndentQuery>>,
     textobject_query: OnceCell<Option<TextObjectQuery>>,
     tag_query: OnceCell<Option<TagQuery>>,
+    outline_query: OnceCell<Option<OutlineQuery>>,
     rainbow_query: OnceCell<Option<RainbowQuery>>,
 }
 
@@ -54,6 +55,7 @@ impl LanguageData {
             indent_query: OnceCell::new(),
             textobject_query: OnceCell::new(),
             tag_query: OnceCell::new(),
+            outline_query: OnceCell::new(),
             rainbow_query: OnceCell::new(),
         }
     }
@@ -192,6 +194,36 @@ impl LanguageData {
             .get_or_init(|| {
                 let grammar = self.syntax_config(loader)?.grammar;
                 Self::compile_tag_query(grammar, &self.config)
+                    .map_err(|err| {
+                        log::error!("{err}");
+                    })
+                    .ok()
+                    .flatten()
+            })
+            .as_ref()
+    }
+
+    /// Compiles the outline.scm query for a language.
+    /// This function should only be used by this module or the xtask crate.
+    pub fn compile_outline_query(
+        grammar: Grammar,
+        config: &LanguageConfiguration,
+    ) -> Result<Option<OutlineQuery>> {
+        let name = &config.language_id;
+        let text = read_query(name, "outline.scm");
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let outline_query = OutlineQuery::new(grammar, &text)
+            .with_context(|| format!("Failed to compile outline.scm query for '{name}'"))?;
+        Ok(Some(outline_query))
+    }
+
+    fn outline_query(&self, loader: &Loader) -> Option<&OutlineQuery> {
+        self.outline_query
+            .get_or_init(|| {
+                let grammar = self.syntax_config(loader)?.grammar;
+                Self::compile_outline_query(grammar, &self.config)
                     .map_err(|err| {
                         log::error!("{err}");
                     })
@@ -418,6 +450,10 @@ impl Loader {
 
     pub fn tag_query(&self, lang: Language) -> Option<&TagQuery> {
         self.language(lang).tag_query(self)
+    }
+
+    pub fn outline_query(&self, lang: Language) -> Option<&OutlineQuery> {
+        self.language(lang).outline_query(self)
     }
 
     fn rainbow_query(&self, lang: Language) -> Option<&RainbowQuery> {

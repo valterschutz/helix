@@ -27,3 +27,24 @@ _Avoid_: Mention, attachment, context file
 **Command**:
 A pi skill or prompt template named with a leading `/` in a request, expanded by pi before the model sees the request.
 _Avoid_: Slash command, skill call
+
+# Reverse Outlining
+
+Helix can show a prose document's structure as its headings plus a one-line summary of each passage, so the writer can check the argument without reading the whole text.
+
+## Language
+
+**Chapter**:
+A heading at any level, such as a Markdown `#` or setext heading.
+_Avoid_: Section
+
+**Summary**:
+A one-line comment whose text starts with `Σ` (U+03A3), written in the document language's comment syntax, such as `<!-- Σ … -->` in Markdown. By convention it sits directly above the first line of the passage it summarises. Other comments are not summaries.
+_Avoid_: Topic sentence
+
+**Passage**:
+A summary plus everything after it up to the next summary or chapter.
+_Avoid_: Paragraph
+
+**Outline**:
+The document's chapters and summaries in document order, with each chapter indented by heading level and each summary one step under its chapter.
