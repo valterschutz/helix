@@ -21,9 +21,11 @@ use helix_stdx::{
 use helix_view::{
     align_view,
     document::{from_reader, SCRATCH_BUFFER_NAME},
+    graphics::Style,
     Align, Document, DocumentId, Editor,
 };
 use ignore::{DirEntry, WalkBuilder, WalkState};
+use tui::text::{Span, Spans};
 
 use crate::{
     filter_picker_entry,
@@ -240,16 +242,26 @@ pub fn outline_picker(cx: &mut Context) {
     let doc_id = doc!(cx.editor).id();
 
     // The indentation is whitespace, which the fuzzy matcher skips, so filtering matches on the
-    // entry text while filtered entries keep their indentation.
-    let columns = [PickerColumn::new("entry", |entry: &OutlineEntry, _| {
-        format!("{}{}", "  ".repeat(entry.depth), entry.text).into()
-    })];
+    // entry text while filtered entries keep their indentation. An empty summary shows a dimmed
+    // placeholder, which filtering matches like any other entry text.
+    let columns = [PickerColumn::new(
+        "entry",
+        |entry: &OutlineEntry, placeholder_style: &Style| {
+            let indent = Span::raw("  ".repeat(entry.depth));
+            let text = if entry.is_summary() && entry.text.is_empty() {
+                Span::styled("(empty summary)", *placeholder_style)
+            } else {
+                Span::raw(entry.text.as_str())
+            };
+            Spans::from(vec![indent, text]).into()
+        },
+    )];
 
     let picker = Picker::new(
         columns,
         0,
         outline.entries().to_vec(),
-        (),
+        cx.editor.theme.get("ui.text.inactive"),
         move |cx, entry, action| {
             cx.editor.switch(doc_id, action);
             let view = view_mut!(cx.editor);
