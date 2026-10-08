@@ -343,3 +343,113 @@ async fn add_summary_is_undone_in_one_step() -> anyhow::Result<()> {
     ))
     .await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn outline_picker_jumps_to_a_typst_summary() -> anyhow::Result<()> {
+    test_with_config(
+        AppBuilder::new().with_config(config_with_key("F2", MappableCommand::outline_picker)),
+        (
+            indoc! {"\
+                #[=|]# Title
+                // Σ The first passage
+                First.
+
+                == Detail
+                /* Σ The second passage */
+                Second.
+            "},
+            ":lang typst<ret><F2>second<ret>",
+            indoc! {"\
+                = Title
+                // Σ The first passage
+                First.
+
+                == Detail
+                #[/|]#* Σ The second passage */
+                Second.
+            "},
+        ),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn add_summary_inserts_a_typst_line_comment_summary_indented_like_the_paragraph(
+) -> anyhow::Result<()> {
+    let input = indoc! {"\
+        = Title
+
+        - A list item
+
+          A second paragraph
+          in the #[l|]#ist item.
+    "};
+    test_add_summary((
+        input,
+        ":lang typst<ret><F3>",
+        indoc! {"\
+            = Title
+
+            - A list item
+
+              // Σ #[\n|]#
+              A second paragraph
+              in the list item.
+        "},
+    ))
+    .await?;
+
+    test_add_summary((
+        input,
+        ":lang typst<ret><F3>Why",
+        indoc! {"\
+            = Title
+
+            - A list item
+
+              // Σ Why#[\n|]#
+              A second paragraph
+              in the list item.
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn add_summary_moves_into_an_existing_typst_summary() -> anyhow::Result<()> {
+    for (input, expected) in [
+        (
+            indoc! {"\
+                /* Σ Intro */
+                Intro #[t|]#ext.
+            "},
+            indoc! {"\
+                /* Σ Intro#[ |]#*/
+                Intro text.
+            "},
+        ),
+        (
+            indoc! {"\
+                // Σ Intro
+                Intro #[t|]#ext.
+            "},
+            indoc! {"\
+                // Σ Intro#[\n|]#
+                Intro text.
+            "},
+        ),
+        (
+            indoc! {"\
+                #[/|]#/ Σ
+                Intro text.
+            "},
+            indoc! {"\
+                // Σ #[\n|]#
+                Intro text.
+            "},
+        ),
+    ] {
+        test_add_summary((input, ":lang typst<ret><F3>", expected)).await?;
+    }
+    Ok(())
+}
