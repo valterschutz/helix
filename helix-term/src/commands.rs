@@ -4052,17 +4052,11 @@ fn open_above(cx: &mut Context) {
 /// Enters insert mode at the end of the summary of the paragraph under the cursor, first inserting
 /// an empty summary above the paragraph when it has none.
 fn add_summary(cx: &mut Context) {
-    let (view, doc) = current!(cx.editor);
-    let loader = cx.editor.syn_loader.load();
-    let text = doc.text().slice(..);
-    let Some(outline) = doc
-        .syntax()
-        .and_then(|syntax| outline::Outline::new(text, syntax, &loader))
-    else {
-        cx.editor
-            .set_error("No outline available for this buffer's language");
+    let Some(outline) = current_outline(cx.editor) else {
         return;
     };
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
     let line = text.char_to_line(doc.selection(view.id).primary().cursor(text));
     let paragraph = outline.paragraph_at(text, line);
     let summary = outline

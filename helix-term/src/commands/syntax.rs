@@ -220,18 +220,24 @@ pub fn syntax_symbol_picker(cx: &mut Context) {
     cx.push_layer(Box::new(overlaid(picker)));
 }
 
-pub fn outline_picker(cx: &mut Context) {
-    let doc = doc!(cx.editor);
-    let loader = cx.editor.syn_loader.load();
-    let Some(outline) = doc
+/// The outline of the current document, or `None` after reporting that its language has none.
+pub(super) fn current_outline(editor: &mut Editor) -> Option<Outline> {
+    let doc = doc!(editor);
+    let loader = editor.syn_loader.load();
+    let outline = doc
         .syntax()
-        .and_then(|syntax| Outline::new(doc.text().slice(..), syntax, &loader))
-    else {
-        cx.editor
-            .set_error("No outline available for this buffer's language");
+        .and_then(|syntax| Outline::new(doc.text().slice(..), syntax, &loader));
+    if outline.is_none() {
+        editor.set_error("No outline available for this buffer's language");
+    }
+    outline
+}
+
+pub fn outline_picker(cx: &mut Context) {
+    let Some(outline) = current_outline(cx.editor) else {
         return;
     };
-    let doc_id = doc.id();
+    let doc_id = doc!(cx.editor).id();
 
     // The indentation is whitespace, which the fuzzy matcher skips, so filtering matches on the
     // entry text while filtered entries keep their indentation.
