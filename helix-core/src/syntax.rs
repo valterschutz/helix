@@ -1288,6 +1288,97 @@ mod test {
         // test("multiple_nodes_grouped", 1..37);
     }
 
+    /// Returns the innermost highlight scope covering the first occurrence of `needle` in a
+    /// Markdown `source`, with the loader configured for the theme scopes in `scopes`.
+    fn markdown_scope_at(source: &str, needle: &str, scopes: &[&str]) -> Option<String> {
+        let loader = crate::config::default_lang_loader();
+        loader.set_scopes(scopes.iter().map(|scope| scope.to_string()).collect());
+        let source = Rope::from_str(source);
+        let language = loader.language_for_name("markdown").unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &loader).unwrap();
+        let target = source.to_string().find(needle).unwrap() as u32;
+
+        let mut highlighter = syntax.highlighter(source.slice(..), &loader, ..);
+        let mut stack = Vec::new();
+        while highlighter.next_event_offset() <= target {
+            let (event, highlights) = highlighter.advance();
+            if event == HighlightEvent::Refresh {
+                stack.clear();
+            }
+            stack.extend(highlights);
+        }
+        stack
+            .last()
+            .map(|highlight| scopes[highlight.idx()].to_string())
+    }
+
+    #[test]
+    fn markdown_summary_has_summary_scope() {
+        let source = "# Chapter\n\n<!-- Σ The passage summary -->\nProse.\n";
+        let scopes = ["comment", "comment.summary"];
+        assert_eq!(
+            markdown_scope_at(source, "The passage summary", &scopes).as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            markdown_scope_at("<!--Σ-->\n", "Σ", &scopes).as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            markdown_scope_at(
+                "- Item\n\n  <!-- Σ Indented -->\n  More.\n",
+                "Indented",
+                &scopes
+            )
+            .as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            markdown_scope_at("Prose.\n<!-- Σ Split -->\nMore.\n", "Split", &scopes).as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            markdown_scope_at("> <!-- Σ Quoted -->\n> More.\n", "Quoted", &scopes).as_deref(),
+            Some("comment.summary")
+        );
+    }
+
+    #[test]
+    fn markdown_summary_falls_back_to_scope_at() {
+        let source = "<!-- Σ The passage summary -->\nProse.\n";
+        assert_eq!(
+            markdown_scope_at(source, "The passage summary", &["comment"]).as_deref(),
+            Some("comment")
+        );
+    }
+
+    #[test]
+    fn markdown_non_summary_comments_keep_scope_at() {
+        let scopes = ["comment", "comment.summary"];
+        let scope_at = |source: &str, needle: &str| markdown_scope_at(source, needle, &scopes);
+
+        // Template instructions without the marker.
+        assert_eq!(
+            scope_at("<!-- Pass 1: read title -->\n", "Pass 1").as_deref(),
+            Some("comment")
+        );
+        // `Σ` somewhere other than first.
+        assert_eq!(
+            scope_at("<!-- Note Σ later -->\n", "Note").as_deref(),
+            Some("comment")
+        );
+        // Multi-line comments.
+        assert_eq!(
+            scope_at("<!-- Σ first line\nsecond line -->\n", "first line").as_deref(),
+            Some("comment")
+        );
+        // Comments inside code blocks.
+        assert_eq!(
+            scope_at("```html\n<!-- Σ sample -->\n```\n", "sample").as_deref(),
+            Some("comment")
+        );
+    }
+
     #[test]
     fn test_input_edits() {
         use tree_sitter::{InputEdit, Point};
