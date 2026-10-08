@@ -132,15 +132,6 @@ impl Outline {
         let language = syntax.root_language();
         let query = loader.outline_query(language)?;
         let config = loader.language(language).config();
-        Some(Self::from_query(text, syntax, query, config))
-    }
-
-    fn from_query(
-        text: RopeSlice,
-        syntax: &Syntax,
-        query: &OutlineQuery,
-        config: &LanguageConfiguration,
-    ) -> Self {
         let root = syntax.tree().root_node();
         let mut cursor = InactiveQueryCursor::new(0..u32::MAX, TREE_SITTER_MATCH_LIMIT)
             .execute_query(&query.query, &root, RopeInput::new(text));
@@ -219,10 +210,10 @@ impl Outline {
         }
 
         let line_count = text.len_lines() - usize::from(get_line_ending(&text).is_some());
-        Self {
+        Some(Self {
             entries,
             line_count,
-        }
+        })
     }
 
     pub fn entries(&self) -> &[OutlineEntry] {
