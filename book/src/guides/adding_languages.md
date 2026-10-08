@@ -52,7 +52,7 @@ below.
    | `locals.scm` | scope tracking so locals highlight distinctly | [locals.md](./locals.md) |
    | `tags.scm` | document/workspace symbol pickers | [tags.md](./tags.md) |
    | `rainbows.scm` | rainbow brackets | [rainbow_bracket_queries.md](./rainbow_bracket_queries.md) |
-   | `outline.scm` | outline picker and add-summary: headings as `@chapter.<level>` with their text as `@name`, and comments as `@comment` | |
+   | `outline.scm` | outline picker and add-summary: headings as `@chapter.<level>` with their text as `@name`, and comments as `@comment`. `@name` may capture several nodes and then spans from the first to the last | |
 
    A query file may reuse another language's with `; inherits: <lang>` on the
    first line. Run `cargo xtask query-check [language]` to check that the queries

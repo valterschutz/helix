@@ -1289,17 +1289,6 @@ mod test {
     }
 
     /// Returns the innermost highlight scope covering the first occurrence of `needle` in a
-    /// Markdown `source`, with the loader configured for the theme scopes in `scopes`.
-    fn markdown_scope_at(source: &str, needle: &str, scopes: &[&str]) -> Option<String> {
-        scope_at("markdown", source, needle, scopes)
-    }
-
-    /// Like [`markdown_scope_at`], for a LaTeX `source`.
-    fn latex_scope_at(source: &str, needle: &str, scopes: &[&str]) -> Option<String> {
-        scope_at("latex", source, needle, scopes)
-    }
-
-    /// Returns the innermost highlight scope covering the first occurrence of `needle` in a
     /// `source` in `language`, with the loader configured for the theme scopes in `scopes`.
     fn scope_at(language: &str, source: &str, needle: &str, scopes: &[&str]) -> Option<String> {
         let loader = crate::config::default_lang_loader();
@@ -1323,33 +1312,61 @@ mod test {
             .map(|highlight| scopes[highlight.idx()].to_string())
     }
 
+    /// Like [`scope_at`], for a theme that styles both comments and summaries.
+    fn summary_scope_at(language: &str, source: &str, needle: &str) -> Option<String> {
+        scope_at(language, source, needle, &["comment", "comment.summary"])
+    }
+
+    /// Asserts that comments in `language` whose text doesn't start with `Σ` keep the comment
+    /// scope, where `comment` puts a text in the language's comment syntax on its own line.
+    fn assert_unmarked_comments_keep_comment_scope(language: &str, comment: fn(&str) -> String) {
+        for (text, needle) in [
+            // Template instructions without the marker.
+            ("Pass 1: read title", "Pass 1"),
+            // `Σ` somewhere other than first.
+            ("Note Σ later", "Note"),
+            // Whitespace other than spaces and tabs before the marker.
+            ("\u{a0}Σ No-break space", "No-break space"),
+        ] {
+            let source = comment(text);
+            assert_eq!(
+                summary_scope_at(language, &source, needle).as_deref(),
+                Some("comment"),
+                "{source:?}"
+            );
+        }
+    }
+
     #[test]
     fn markdown_summary_has_summary_scope() {
-        let source = "# Chapter\n\n<!-- Σ The passage summary -->\nProse.\n";
-        let scopes = ["comment", "comment.summary"];
         assert_eq!(
-            markdown_scope_at(source, "The passage summary", &scopes).as_deref(),
-            Some("comment.summary")
-        );
-        assert_eq!(
-            markdown_scope_at("<!--Σ-->\n", "Σ", &scopes).as_deref(),
-            Some("comment.summary")
-        );
-        assert_eq!(
-            markdown_scope_at(
-                "- Item\n\n  <!-- Σ Indented -->\n  More.\n",
-                "Indented",
-                &scopes
+            summary_scope_at(
+                "markdown",
+                "# Chapter\n\n<!-- Σ The passage summary -->\nProse.\n",
+                "The passage summary"
             )
             .as_deref(),
             Some("comment.summary")
         );
         assert_eq!(
-            markdown_scope_at("Prose.\n<!-- Σ Split -->\nMore.\n", "Split", &scopes).as_deref(),
+            summary_scope_at("markdown", "<!--Σ-->\n", "Σ").as_deref(),
             Some("comment.summary")
         );
         assert_eq!(
-            markdown_scope_at("> <!-- Σ Quoted -->\n> More.\n", "Quoted", &scopes).as_deref(),
+            summary_scope_at(
+                "markdown",
+                "- Item\n\n  <!-- Σ Indented -->\n  More.\n",
+                "Indented"
+            )
+            .as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("markdown", "Prose.\n<!-- Σ Split -->\nMore.\n", "Split").as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("markdown", "> <!-- Σ Quoted -->\n> More.\n", "Quoted").as_deref(),
             Some("comment.summary")
         );
     }
@@ -1358,88 +1375,98 @@ mod test {
     fn markdown_summary_falls_back_to_comment_scope() {
         let source = "<!-- Σ The passage summary -->\nProse.\n";
         assert_eq!(
-            markdown_scope_at(source, "The passage summary", &["comment"]).as_deref(),
+            scope_at("markdown", source, "The passage summary", &["comment"]).as_deref(),
             Some("comment")
         );
     }
 
     #[test]
     fn markdown_non_summary_comments_keep_comment_scope() {
-        let scopes = ["comment", "comment.summary"];
-        let scope_at = |source: &str, needle: &str| markdown_scope_at(source, needle, &scopes);
-
-        // Template instructions without the marker.
-        assert_eq!(
-            scope_at("<!-- Pass 1: read title -->\n", "Pass 1").as_deref(),
-            Some("comment")
-        );
-        // `Σ` somewhere other than first.
-        assert_eq!(
-            scope_at("<!-- Note Σ later -->\n", "Note").as_deref(),
-            Some("comment")
-        );
+        assert_unmarked_comments_keep_comment_scope("markdown", |text| {
+            format!("<!-- {text} -->\n")
+        });
         // Multi-line comments.
         assert_eq!(
-            scope_at("<!-- Σ first line\nsecond line -->\n", "first line").as_deref(),
+            summary_scope_at(
+                "markdown",
+                "<!-- Σ first line\nsecond line -->\n",
+                "first line"
+            )
+            .as_deref(),
             Some("comment")
         );
         // Comments inside code blocks.
         assert_eq!(
-            scope_at("```html\n<!-- Σ sample -->\n```\n", "sample").as_deref(),
+            summary_scope_at("markdown", "```html\n<!-- Σ sample -->\n```\n", "sample").as_deref(),
             Some("comment")
         );
     }
 
     #[test]
-    fn typst_summaries_have_summary_scope_and_other_comments_keep_comment_scope() {
-        let scopes = ["comment", "comment.summary"];
-        let scope_at = |source: &str, needle: &str| scope_at("typst", source, needle, &scopes);
-
+    fn typst_summary_has_summary_scope() {
         assert_eq!(
-            scope_at("= Chapter\n// Σ The passage\nProse.\n", "The passage").as_deref(),
+            summary_scope_at(
+                "typst",
+                "= Chapter\n// Σ The passage\nProse.\n",
+                "The passage"
+            )
+            .as_deref(),
             Some("comment.summary")
         );
         assert_eq!(
-            scope_at("/* Σ Block */\nProse.\n", "Block").as_deref(),
+            summary_scope_at("typst", "/* Σ Block */\nProse.\n", "Block").as_deref(),
             Some("comment.summary")
         );
-        assert_eq!(scope_at("//Σ\n", "Σ").as_deref(), Some("comment.summary"));
+        assert_eq!(
+            summary_scope_at("typst", "//Σ\n", "Σ").as_deref(),
+            Some("comment.summary")
+        );
+    }
 
+    #[test]
+    fn typst_non_summary_comments_keep_comment_scope() {
+        assert_unmarked_comments_keep_comment_scope("typst", |text| format!("// {text}\n"));
+        // Multi-line comments.
         assert_eq!(
-            scope_at("// Pass 1: read title\n", "Pass 1").as_deref(),
+            summary_scope_at("typst", "/* Σ first line\nsecond line */\n", "first line").as_deref(),
             Some("comment")
         );
+    }
+
+    #[test]
+    fn typst_summaries_in_typst_code_blocks_have_summary_scope() {
+        // A known limitation: a raw block tagged `typ` is injected as Typst, whose highlight
+        // query can't tell that it runs in an injection, so its summaries are highlighted even
+        // though the outline, which only queries the root language, ignores them. A `markdown`
+        // code block in Markdown behaves the same.
         assert_eq!(
-            scope_at("// Note Σ later\n", "Note").as_deref(),
-            Some("comment")
-        );
-        assert_eq!(
-            scope_at("/* Σ first line\nsecond line */\n", "first line").as_deref(),
-            Some("comment")
+            summary_scope_at("typst", "```typ\n// Σ sample\n```\n", "sample").as_deref(),
+            Some("comment.summary")
         );
     }
 
     #[test]
     fn latex_summary_has_summary_scope() {
-        let scopes = ["comment", "comment.summary"];
-        let scope_at = |source: &str, needle: &str| latex_scope_at(source, needle, &scopes);
-
         assert_eq!(
-            scope_at(
+            summary_scope_at(
+                "latex",
                 "\\section{Chapter}\n% Σ The passage summary\nProse.\n",
                 "The passage"
             )
             .as_deref(),
             Some("comment.summary")
         );
-        assert_eq!(scope_at("%Σ\n", "Σ").as_deref(), Some("comment.summary"));
         assert_eq!(
-            scope_at("\tIndented.\n\t% Σ Indented\n", "Σ Indented").as_deref(),
+            summary_scope_at("latex", "%Σ\n", "Σ").as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("latex", "\tIndented.\n\t% Σ Indented\n", "Σ Indented").as_deref(),
             Some("comment.summary")
         );
         // The outline also takes a comment after text on its line as a summary.
         assert_eq!(
-            scope_at("Prose. % Σ Trailing\n", "Trailing").as_deref(),
+            summary_scope_at("latex", "Prose. % Σ Trailing\n", "Trailing").as_deref(),
             Some("comment.summary")
         );
     }
@@ -1447,33 +1474,32 @@ mod test {
     #[test]
     fn latex_summary_falls_back_to_comment_scope() {
         assert_eq!(
-            latex_scope_at("% Σ The passage summary\n", "The passage", &["comment"]).as_deref(),
+            scope_at(
+                "latex",
+                "% Σ The passage summary\n",
+                "The passage",
+                &["comment"]
+            )
+            .as_deref(),
             Some("comment")
         );
     }
 
     #[test]
     fn latex_non_summary_comments_keep_comment_scope() {
-        let scopes = ["comment", "comment.summary"];
-        let scope_at = |source: &str, needle: &str| latex_scope_at(source, needle, &scopes);
-
-        // Template instructions without the marker.
-        assert_eq!(
-            scope_at("% Pass 1: read title\n", "Pass 1").as_deref(),
-            Some("comment")
-        );
-        // `Σ` somewhere other than first.
-        assert_eq!(
-            scope_at("% Note Σ later\n", "Note").as_deref(),
-            Some("comment")
-        );
+        assert_unmarked_comments_keep_comment_scope("latex", |text| format!("% {text}\n"));
         // Comments that aren't line comments.
         assert_eq!(
-            scope_at("\\begin{comment}\n% Σ sample\n\\end{comment}\n", "sample").as_deref(),
+            summary_scope_at(
+                "latex",
+                "\\begin{comment}\n% Σ sample\n\\end{comment}\n",
+                "sample"
+            )
+            .as_deref(),
             Some("comment")
         );
         assert_eq!(
-            scope_at("\\iffalse\n% Σ skipped\n\\fi\n", "skipped").as_deref(),
+            summary_scope_at("latex", "\\iffalse\n% Σ skipped\n\\fi\n", "skipped").as_deref(),
             Some("comment")
         );
     }

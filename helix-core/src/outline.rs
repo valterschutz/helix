@@ -132,15 +132,6 @@ impl Outline {
         let language = syntax.root_language();
         let query = loader.outline_query(language)?;
         let config = loader.language(language).config();
-        Some(Self::from_query(text, syntax, query, config))
-    }
-
-    fn from_query(
-        text: RopeSlice,
-        syntax: &Syntax,
-        query: &OutlineQuery,
-        config: &LanguageConfiguration,
-    ) -> Self {
         let root = syntax.tree().root_node();
         let mut cursor = InactiveQueryCursor::new(0..u32::MAX, TREE_SITTER_MATCH_LIMIT)
             .execute_query(&query.query, &root, RopeInput::new(text));
@@ -219,10 +210,10 @@ impl Outline {
         }
 
         let line_count = text.len_lines() - usize::from(get_line_ending(&text).is_some());
-        Self {
+        Some(Self {
             entries,
             line_count,
-        }
+        })
     }
 
     pub fn entries(&self) -> &[OutlineEntry] {
@@ -317,8 +308,8 @@ pub fn empty_summary(config: &LanguageConfiguration) -> Option<EmptySummary> {
 }
 
 /// Returns the byte range of the trimmed summary text in a single-line `comment` whose text, after
-/// the language's comment opener, starts with [`SUMMARY_MARKER`], and the padding that lays out an
-/// empty summary like a new one.
+/// the language's comment opener and any spaces or tabs, starts with [`SUMMARY_MARKER`], and the
+/// padding that lays out an empty summary like a new one.
 fn summary_text_range(
     comment: &str,
     config: &LanguageConfiguration,
@@ -341,7 +332,9 @@ fn summary_text_range(
     line_comment_texts
         .chain(block_comment_texts)
         .find_map(|(text_start, text, has_closer)| {
-            let after_marker = text.trim_start().strip_prefix(SUMMARY_MARKER)?;
+            let after_marker = text
+                .trim_start_matches([' ', '\t'])
+                .strip_prefix(SUMMARY_MARKER)?;
             let marker_end = text_start + text.len() - after_marker.len();
             let summary = after_marker.trim();
             if !summary.is_empty() {
@@ -447,6 +440,20 @@ mod test {
             writeln!(out, "{indent}{marker} {} {:?}", entry.text, entry.lines).unwrap();
         }
         out
+    }
+
+    /// Each passage as its summary text and line range.
+    fn passages(outline: &Outline) -> Vec<(&str, Range<usize>)> {
+        outline
+            .passages()
+            .map(|passage| (passage.summary.text.as_str(), passage.lines))
+            .collect()
+    }
+
+    /// The text of the summary directly above the paragraph containing `line`.
+    fn summary_above<'a>(outline: &'a Outline, text: RopeSlice, line: usize) -> Option<&'a str> {
+        let paragraph = outline.paragraph_at(text, line)?;
+        Some(outline.summary_above(&paragraph)?.text.as_str())
     }
 
     #[test]
@@ -555,6 +562,18 @@ mod test {
                   Σ The only summary 15..16
             "}
         );
+    }
+
+    #[test]
+    fn only_spaces_and_tabs_may_separate_the_comment_opener_from_the_marker() {
+        // The highlight queries allow only `[ \t]` there, and the outline agrees with them.
+        let (_, outline) = markdown_outline("<!--\tΣ Tab -->\n\n<!--\u{a0}Σ No-break space -->\n");
+        assert_eq!(render(&outline), "Σ Tab 0..1\n");
+        let (_, outline) = latex_outline("%\tΣ Tab\n%\u{a0}Σ No-break space\n");
+        assert_eq!(render(&outline), "Σ Tab 0..1\n");
+        let (_, outline) =
+            typst_outline("//\tΣ Tab\n//\u{a0}Σ No-break space\n/*\u{a0}Σ No-break space */\n");
+        assert_eq!(render(&outline), "Σ Tab 0..1\n");
     }
 
     #[test]
@@ -687,7 +706,7 @@ mod test {
     }
 
     #[test]
-    fn line_comment_summaries_are_entered_at_the_end_of_their_text() {
+    fn latex_summaries_are_entered_at_the_end_of_their_text() {
         let (text, outline) =
             latex_outline("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
         assert_eq!(
@@ -704,7 +723,7 @@ mod test {
     }
 
     #[test]
-    fn latex_sectioning_commands_are_chapters_at_successive_levels() {
+    fn latex_headings_are_chapters_at_successive_levels() {
         let (_, outline) = latex_outline(indoc! {r"
             \documentclass{book}
             \begin{document}
@@ -741,34 +760,25 @@ mod test {
     fn latex_summaries_sit_one_step_under_their_chapter() {
         let (_, outline) = latex_outline(indoc! {r"
             % Σ Why this document exists
-            Intro text.
-
             \section{Background}
             %Σ The problem
-            Some text.
               % Σ   An indented passage
-              More text.
-
-            \subsection{Detail}
-
             % Σ
-            Unsummarised text.
         "});
         assert_eq!(
             render(&outline),
             indoc! {"
                 Σ Why this document exists 0..1
-                h3 Background 3..4
-                  Σ The problem 4..5
-                  Σ An indented passage 6..7
-                  h4 Detail 9..10
-                    Σ  11..12
+                h3 Background 1..2
+                  Σ The problem 2..3
+                  Σ An indented passage 3..4
+                  Σ  4..5
             "}
         );
     }
 
     #[test]
-    fn only_latex_line_comments_starting_with_the_marker_are_summaries() {
+    fn latex_only_line_comments_starting_with_the_marker_are_summaries() {
         let (_, outline) = latex_outline(indoc! {r"
             \section{Notes}
             % Pass 1: read title and abstract
@@ -842,21 +852,13 @@ mod test {
             Unsummarised.
             \section{Two}
         "});
-        let passages: Vec<_> = outline
-            .passages()
-            .map(|passage| (passage.summary.text.as_str(), passage.lines))
-            .collect();
-        assert_eq!(passages, [("intro", 0..2), ("first", 3..8)]);
+        assert_eq!(passages(&outline), [("intro", 0..2), ("first", 3..8)]);
 
         let text = text.slice(..);
-        let summary_above = |line| {
-            let paragraph = outline.paragraph_at(text, line)?;
-            Some(outline.summary_above(&paragraph)?.text.as_str())
-        };
         assert_eq!(outline.paragraph_at(text, 5), Some(4..6));
-        assert_eq!(summary_above(5), Some("first"));
+        assert_eq!(summary_above(&outline, text, 5), Some("first"));
         assert_eq!(outline.paragraph_at(text, 7), Some(7..8));
-        assert_eq!(summary_above(7), None);
+        assert_eq!(summary_above(&outline, text, 7), None);
         for line in [0, 2, 3, 6, 8] {
             assert_eq!(outline.paragraph_at(text, line), None);
         }
@@ -888,12 +890,8 @@ mod test {
             <!-- Σ last -->
             Last.
         "});
-        let passages: Vec<_> = outline
-            .passages()
-            .map(|passage| (passage.summary.text.as_str(), passage.lines))
-            .collect();
         assert_eq!(
-            passages,
+            passages(&outline),
             [
                 ("intro", 0..3),
                 ("first", 4..6),
@@ -918,21 +916,17 @@ mod test {
             Three.
         "});
         let text = text.slice(..);
-        let summary_above = |line| {
-            let paragraph = outline.paragraph_at(text, line)?;
-            Some(outline.summary_above(&paragraph)?.text.as_str())
-        };
 
         for line in 2..5 {
             assert_eq!(outline.paragraph_at(text, line), Some(2..5));
-            assert_eq!(summary_above(line), Some("first"));
+            assert_eq!(summary_above(&outline, text, line), Some("first"));
         }
         for line in 6..8 {
             assert_eq!(outline.paragraph_at(text, line), Some(6..8));
-            assert_eq!(summary_above(line), None);
+            assert_eq!(summary_above(&outline, text, line), None);
         }
         assert_eq!(outline.paragraph_at(text, 9), Some(9..10));
-        assert_eq!(summary_above(9), Some("third"));
+        assert_eq!(summary_above(&outline, text, 9), Some("third"));
 
         // Blank lines, chapters and summaries are not part of any paragraph.
         for line in [0, 1, 5, 8] {
@@ -947,29 +941,24 @@ mod test {
     #[test]
     fn typst_headings_are_chapters_at_their_number_of_equals_signs() {
         let (_, outline) = typst_outline(indoc! {"
+            = One
             == Two
-
             === Three
             ==== Four
             ===== Five
-
             ====== Six
-            == Two again
         "});
         assert_eq!(
             render(&outline),
             indoc! {"
-                h2 Two 0..1
-                  h3 Three 2..3
-                    h4 Four 3..4
-                      h5 Five 4..5
-                        h6 Six 6..7
-                h2 Two again 7..8
+                h1 One 0..1
+                  h2 Two 1..2
+                    h3 Three 2..3
+                      h4 Four 3..4
+                        h5 Five 4..5
+                          h6 Six 5..6
             "}
         );
-
-        let (_, outline) = typst_outline("= One\n== Two\n");
-        assert_eq!(render(&outline), "h1 One 0..1\n  h2 Two 1..2\n");
     }
 
     #[test]
@@ -996,30 +985,21 @@ mod test {
     fn typst_line_and_single_line_block_comment_summaries_sit_under_their_chapter() {
         let (_, outline) = typst_outline(indoc! {"
             // Σ Why this document exists
-            Intro text.
-
             = Background
             /* Σ The problem */
-            Some text.
             //Σ   A second passage
-            More text.
-
-            == Detail
-
             // Σ
-            Unsummarised text.
             /*Σ*/
         "});
         assert_eq!(
             render(&outline),
             indoc! {"
                 Σ Why this document exists 0..1
-                h1 Background 3..4
-                  Σ The problem 4..5
-                  Σ A second passage 6..7
-                  h2 Detail 9..10
-                    Σ  11..12
-                    Σ  13..14
+                h1 Background 1..2
+                  Σ The problem 2..3
+                  Σ A second passage 3..4
+                  Σ  4..5
+                  Σ  5..6
             "}
         );
     }
@@ -1086,24 +1066,16 @@ mod test {
             == Two
             Unsummarised.
         "});
-        let passages: Vec<_> = outline
-            .passages()
-            .map(|passage| (passage.summary.text.as_str(), passage.lines))
-            .collect();
         assert_eq!(
-            passages,
+            passages(&outline),
             [("intro", 0..3), ("first", 4..7), ("second", 7..11)]
         );
 
         let text = text.slice(..);
-        let summary_above = |line| {
-            let paragraph = outline.paragraph_at(text, line)?;
-            Some(outline.summary_above(&paragraph)?.text.as_str())
-        };
         assert_eq!(outline.paragraph_at(text, 6), Some(5..7));
-        assert_eq!(summary_above(6), Some("first"));
+        assert_eq!(summary_above(&outline, text, 6), Some("first"));
         assert_eq!(outline.paragraph_at(text, 10), Some(10..11));
-        assert_eq!(summary_above(10), None);
+        assert_eq!(summary_above(&outline, text, 10), None);
         for line in [3, 4, 7, 11] {
             assert_eq!(outline.paragraph_at(text, line), None);
         }
