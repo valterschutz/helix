@@ -10,6 +10,7 @@ use futures_util::FutureExt;
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{sinks, BinaryDetection, SearcherBuilder};
 use helix_core::{
+    outline::{Outline, OutlineEntry},
     syntax::{Loader, QueryMatchIterEvent},
     Rope, RopeSlice, Selection, Syntax, Uri,
 };
@@ -213,6 +214,52 @@ pub fn syntax_symbol_picker(cx: &mut Context) {
     )
     .with_preview(|_editor, tag| {
         Some((tag.doc.path_or_id()?, Some((tag.start_line, tag.end_line))))
+    })
+    .truncate_start(false);
+
+    cx.push_layer(Box::new(overlaid(picker)));
+}
+
+pub fn outline_picker(cx: &mut Context) {
+    let doc = doc!(cx.editor);
+    let loader = cx.editor.syn_loader.load();
+    let Some(outline) = doc
+        .syntax()
+        .and_then(|syntax| Outline::new(doc.text().slice(..), syntax, &loader))
+    else {
+        cx.editor
+            .set_error("No outline available for this buffer's language");
+        return;
+    };
+    let doc_id = doc.id();
+
+    // The indentation is whitespace, which the fuzzy matcher skips, so filtering matches on the
+    // entry text while filtered entries keep their indentation.
+    let columns = [PickerColumn::new("entry", |entry: &OutlineEntry, _| {
+        format!("{}{}", "  ".repeat(entry.depth), entry.text).into()
+    })];
+
+    let picker = Picker::new(
+        columns,
+        0,
+        outline.entries().to_vec(),
+        (),
+        move |cx, entry, action| {
+            cx.editor.switch(doc_id, action);
+            let view = view_mut!(cx.editor);
+            let doc = doc_mut!(cx.editor, &doc_id);
+            let line_start = doc.text().line_to_char(entry.lines.start);
+            doc.set_selection(view.id, Selection::point(line_start));
+            if action.align_view(view, doc.id()) {
+                align_view(doc, view, Align::Center)
+            }
+        },
+    )
+    .with_preview(move |_editor, entry| {
+        Some((
+            PathOrId::Id(doc_id),
+            Some((entry.lines.start, entry.lines.end - 1)),
+        ))
     })
     .truncate_start(false);
 
