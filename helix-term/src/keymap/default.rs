@@ -163,9 +163,11 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         ">" => indent,
         "<" => unindent,
         "=" => format_selections,
-        "J" => join_selections,
+        "J" => move_lines_down,
+        "C-j" => join_selections,
         "A-J" => join_selections_space,
-        "K" => keep_selections,
+        "K" => move_lines_up,
+        "C-k" => keep_selections,
         "A-K" => remove_selections,
 
         "," => keep_primary_selection,

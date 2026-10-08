@@ -171,6 +171,7 @@ The following statusline elements can be configured:
 | `display-progress-messages` | Display LSP progress messages below statusline[^1]    | `false` |
 | `auto-signature-help` | Enable automatic popup of signature help (parameter hints)  | `true`  |
 | `auto-document-highlight` | Automatically highlight symbol references at the cursor | `false` |
+| `display-diagnostics` | Show diagnostic highlights, gutter markers, inline/end-of-line/cursor messages and document/workspace statusline counts. Toggle with `:toggle lsp.display-diagnostics`; diagnostics remain collected and available to explicit navigation and pickers while hidden. | `true` |
 | `display-inlay-hints` | Display inlay hints[^2]                                     | `false` |
 | `inlay-hints-length-limit` | Maximum displayed length (non-zero number) of inlay hints | Unset by default  |
 | `display-color-swatches` | Show color swatches next to colors | `true` |

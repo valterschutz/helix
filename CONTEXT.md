@@ -1,8 +1,12 @@
-# Inline AI Editing
+# Helix Fork
+
+Personal features carried by this fork of Helix.
+
+## Inline AI Editing
 
 Helix can ask pi to transform a selected snippet and review the proposed replacement without leaving the editor.
 
-## Language
+### Language
 
 **AI edit conversation**:
 The interaction that begins when a selected snippet opens an inline prompt and ends when the proposal is applied or the interface is closed.
@@ -28,26 +32,27 @@ _Avoid_: Mention, attachment, context file
 A pi skill or prompt template named with a leading `/` in a request, expanded by pi before the model sees the request.
 _Avoid_: Slash command, skill call
 
-# Reverse Outlining
+## Reverse Outlining
 
-Helix can show a prose document's structure as its headings plus a one-line summary of each passage, so the writer can check the argument without reading the whole text.
+A writer states what each passage of a prose document says in a summary, then reads the chapters and summaries in sequence to check the document's structure.
 
-## Language
+### Language
 
 **Chapter**:
-A heading at any level, such as a Markdown `#` or setext heading.
-_Avoid_: Section
+A part of a prose document introduced by a heading, at any heading level.
+_Avoid_: Section, symbol
 
 **Summary**:
-A one-line comment whose text starts with `Σ` (U+03A3), written in the document language's comment syntax, such as `<!-- Σ … -->` in Markdown. By convention it sits directly above the first line of the passage it summarises. Other comments are not summaries.
-_Avoid_: Topic sentence
+A one-line comment marked with `Σ` that states what the passage below it says. It is not part of the prose.
+_Avoid_: Topic sentence, gist, annotation
 
 **Passage**:
-A summary plus everything after it up to the next summary or chapter.
+A summary together with everything after it up to the next summary or heading. It may span several paragraphs, lists or other blocks.
 _Avoid_: Paragraph
 
 **Paragraph**:
-A contiguous run of non-blank lines, not counting chapter and summary lines. A passage may contain several. Add-summary works on the paragraph under the cursor.
+A contiguous run of non-blank lines, excluding chapter and summary lines. A passage may contain several.
 
 **Outline**:
-The document's chapters and summaries in document order, with each chapter indented by heading level and each summary one step under its chapter.
+The chapters and summaries of one document, in document order and nested by heading level.
+_Avoid_: Table of contents, symbol list

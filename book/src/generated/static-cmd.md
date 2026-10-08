@@ -208,9 +208,11 @@
 | `indent` | Indent selection | normal: `` <gt> ``, select: `` <gt> `` |
 | `unindent` | Unindent selection | normal: `` <lt> ``, select: `` <lt> `` |
 | `format_selections` | Format selection | normal: `` = ``, select: `` = `` |
-| `join_selections` | Join lines inside selection | normal: `` J ``, select: `` J `` |
+| `join_selections` | Join lines inside selection | normal: `` <C-j> ``, select: `` <C-j> `` |
 | `join_selections_space` | Join lines inside selection and select spaces | normal: `` <A-J> ``, select: `` <A-J> `` |
-| `keep_selections` | Keep selections matching regex | normal: `` K ``, select: `` K `` |
+| `move_lines_down` | Move selected lines down | normal: `` J ``, select: `` J `` |
+| `move_lines_up` | Move selected lines up | normal: `` K ``, select: `` K `` |
+| `keep_selections` | Keep selections matching regex | normal: `` <C-k> ``, select: `` <C-k> `` |
 | `remove_selections` | Remove selections matching regex | normal: `` <A-K> ``, select: `` <A-K> `` |
 | `align_selections` | Align selections in column | normal: `` & ``, select: `` & `` |
 | `keep_primary_selection` | Keep primary selection | normal: `` , ``, select: `` , `` |

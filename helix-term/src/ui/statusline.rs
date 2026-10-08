@@ -234,6 +234,10 @@ fn render_diagnostics<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
+    if !context.editor.config().lsp.display_diagnostics {
+        return;
+    }
+
     use helix_core::diagnostic::Severity;
     let (hints, info, warnings, errors) =
         context
@@ -283,6 +287,10 @@ fn render_workspace_diagnostics<'a, F>(context: &mut RenderContext<'a>, write: F
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
+    if !context.editor.config().lsp.display_diagnostics {
+        return;
+    }
+
     use helix_core::diagnostic::Severity;
     let (hints, info, warnings, errors) = context.editor.diagnostics.values().flatten().fold(
         (0u32, 0u32, 0u32, 0u32),

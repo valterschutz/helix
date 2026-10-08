@@ -143,7 +143,9 @@ impl EditorView {
             overlays.push(overlay);
         }
 
-        Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
+        if config.lsp.display_diagnostics {
+            Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
+        }
 
         if is_focused {
             if config.lsp.auto_document_highlight {
@@ -194,17 +196,20 @@ impl EditorView {
         }
         let width = view.inner_width(doc);
         let config = doc.config.load();
-        let enable_cursor_line = view
-            .diagnostics_handler
-            .show_cursorline_diagnostics(doc, view.id);
-        let inline_diagnostic_config = config.inline_diagnostics.prepare(width, enable_cursor_line);
-        decorations.add_decoration(InlineDiagnostics::new(
-            doc,
-            theme,
-            primary_cursor,
-            inline_diagnostic_config,
-            config.end_of_line_diagnostics,
-        ));
+        if config.lsp.display_diagnostics {
+            let enable_cursor_line = view
+                .diagnostics_handler
+                .show_cursorline_diagnostics(doc, view.id);
+            let inline_diagnostic_config =
+                config.inline_diagnostics.prepare(width, enable_cursor_line);
+            decorations.add_decoration(InlineDiagnostics::new(
+                doc,
+                theme,
+                primary_cursor,
+                inline_diagnostic_config,
+                config.end_of_line_diagnostics,
+            ));
+        }
         render_document(
             surface,
             inner,
@@ -229,7 +234,8 @@ impl EditorView {
             }
         }
 
-        if config.inline_diagnostics.disabled()
+        if config.lsp.display_diagnostics
+            && config.inline_diagnostics.disabled()
             && config.end_of_line_diagnostics == DiagnosticFilter::Disable
         {
             Self::render_diagnostics(doc, view, inner, surface, theme);
