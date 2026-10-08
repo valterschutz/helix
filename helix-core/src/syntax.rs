@@ -1434,6 +1434,18 @@ mod test {
     }
 
     #[test]
+    fn typst_summaries_in_typst_code_blocks_have_summary_scope() {
+        // A known limitation: a raw block tagged `typ` is injected as Typst, whose highlight
+        // query can't tell that it runs in an injection, so its summaries are highlighted even
+        // though the outline, which only queries the root language, ignores them. A `markdown`
+        // code block in Markdown behaves the same.
+        assert_eq!(
+            summary_scope_at("typst", "```typ\n// Σ sample\n```\n", "sample").as_deref(),
+            Some("comment.summary")
+        );
+    }
+
+    #[test]
     fn latex_summary_has_summary_scope() {
         assert_eq!(
             summary_scope_at(
