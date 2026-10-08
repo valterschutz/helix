@@ -678,17 +678,8 @@ mod test {
 
     #[test]
     fn line_comment_summaries_are_entered_at_the_end_of_their_text() {
-        // No LaTeX outline query exists yet, so this one only captures comments.
-        let text = Rope::from_str("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
-        let language = LOADER.language_for_name("latex").unwrap();
-        let syntax = Syntax::new(text.slice(..), language, &LOADER).unwrap();
-        let query = OutlineQuery::new(
-            syntax.tree().root_node().grammar(),
-            "(line_comment) @comment",
-        )
-        .unwrap();
-        let config = LOADER.language(language).config();
-        let outline = Outline::from_query(text.slice(..), &syntax, &query, config);
+        let (text, outline) =
+            latex_outline("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
         assert_eq!(
             entered_summaries(&text, &outline),
             [
@@ -734,6 +725,36 @@ mod test {
 
         let (_, outline) = latex_outline("\\section{One}\n\\subsection{Two}\n");
         assert_eq!(render(&outline), "h3 One 0..1\n  h4 Two 1..2\n");
+    }
+
+    #[test]
+    fn latex_summaries_sit_one_step_under_their_chapter() {
+        let (_, outline) = latex_outline(indoc! {r"
+            % Σ Why this document exists
+            Intro text.
+
+            \section{Background}
+            %Σ The problem
+            Some text.
+              % Σ   An indented passage
+              More text.
+
+            \subsection{Detail}
+
+            % Σ
+            Unsummarised text.
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                Σ Why this document exists 0..1
+                h3 Background 3..4
+                  Σ The problem 4..5
+                  Σ An indented passage 6..7
+                  h4 Detail 9..10
+                    Σ  11..12
+            "}
+        );
     }
 
     #[test]

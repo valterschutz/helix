@@ -6,3 +6,5 @@
 (subsubsection text: (curly_group (_)* @name) @chapter.5)
 (paragraph text: (curly_group (_)* @name) @chapter.6)
 (subparagraph text: (curly_group (_)* @name) @chapter.7)
+
+(line_comment) @comment
