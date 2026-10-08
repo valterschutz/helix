@@ -60,10 +60,20 @@ pub enum OutlineEntryKind {
         level: u8,
     },
     Summary {
-        /// The char index in the document just after the summary text, where editing the summary
-        /// resumes.
+        /// The char index in the document where editing the summary resumes: just after the
+        /// summary text, or where the text of an empty summary goes.
         text_end: usize,
+        /// Spaces to insert at `text_end` that lay out an empty summary like a new one from
+        /// [`empty_summary`], such as the space before `-->` in `<!-- Σ -->`.
+        padding: SummaryPadding,
     },
+}
+
+/// Spaces to insert before and after the cursor when editing a summary resumes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SummaryPadding {
+    pub before: &'static str,
+    pub after: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +110,15 @@ impl Outline {
         let language = syntax.root_language();
         let query = loader.outline_query(language)?;
         let config = loader.language(language).config();
+        Some(Self::from_query(text, syntax, query, config))
+    }
+
+    fn from_query(
+        text: RopeSlice,
+        syntax: &Syntax,
+        query: &OutlineQuery,
+        config: &LanguageConfiguration,
+    ) -> Self {
         let root = syntax.tree().root_node();
         let mut cursor = InactiveQueryCursor::new(0..u32::MAX, TREE_SITTER_MATCH_LIMIT)
             .execute_query(&query.query, &root, RopeInput::new(text));
@@ -138,11 +157,12 @@ impl Outline {
                 }
                 let comment = text.byte_slice(byte_range.clone()).to_string();
                 let comment_start = byte_range.start + comment.len() - comment.trim_start().len();
-                let comment = comment.trim();
-                if let Some(summary) = summary_text_range(comment, config) {
+                // Trailing whitespace is kept, as an empty line comment summary's text goes after it.
+                let comment = comment.trim_start().lines().next().unwrap_or_default();
+                if let Some((summary, padding)) = summary_text_range(comment, config) {
                     let text_end = text.byte_to_char(comment_start + summary.end);
                     entries.push(OutlineEntry {
-                        kind: OutlineEntryKind::Summary { text_end },
+                        kind: OutlineEntryKind::Summary { text_end, padding },
                         text: comment[summary].to_string(),
                         lines,
                         depth: 0,
@@ -172,10 +192,10 @@ impl Outline {
         }
 
         let line_count = text.len_lines() - usize::from(get_line_ending(&text).is_some());
-        Some(Self {
+        Self {
             entries,
             line_count,
-        })
+        }
     }
 
     pub fn entries(&self) -> &[OutlineEntry] {
@@ -261,42 +281,53 @@ pub fn empty_summary(config: &LanguageConfiguration) -> Option<(String, usize)> 
 }
 
 /// Returns the byte range of the trimmed summary text in a single-line `comment` whose text, after
-/// the language's comment opener, starts with [`SUMMARY_MARKER`].
-fn summary_text_range(comment: &str, config: &LanguageConfiguration) -> Option<Range<usize>> {
-    let line_comment_texts = config
-        .comment_tokens
-        .iter()
-        .flatten()
-        .filter_map(|token| Some((token.len(), comment.strip_prefix(token.as_str())?)));
+/// the language's comment opener, starts with [`SUMMARY_MARKER`], and the padding that lays out an
+/// empty summary like a new one.
+fn summary_text_range(
+    comment: &str,
+    config: &LanguageConfiguration,
+) -> Option<(Range<usize>, SummaryPadding)> {
+    let line_comment_texts = config.comment_tokens.iter().flatten().filter_map(|token| {
+        let text = comment.strip_prefix(token.as_str())?;
+        Some((token.len(), text, false))
+    });
     let block_comment_texts = config
         .block_comment_tokens
         .iter()
         .flatten()
         .filter_map(|token| {
             let text = comment
+                .trim_end()
                 .strip_prefix(token.start.as_str())?
                 .strip_suffix(token.end.as_str())?;
-            Some((token.start.len(), text))
+            Some((token.start.len(), text, true))
         });
     line_comment_texts
         .chain(block_comment_texts)
-        .find_map(|(text_start, text)| {
+        .find_map(|(text_start, text, has_closer)| {
             let after_marker = text.trim_start().strip_prefix(SUMMARY_MARKER)?;
             let marker_end = text_start + text.len() - after_marker.len();
             let summary = after_marker.trim();
-            let summary_start = if summary.is_empty() {
-                // An empty summary's text goes after the space following the marker, which is
-                // where add-summary leaves the cursor in a new summary.
-                marker_end
-                    + after_marker
-                        .chars()
-                        .next()
-                        .filter(|ch| ch.is_whitespace())
-                        .map_or(0, char::len_utf8)
-            } else {
-                marker_end + after_marker.len() - after_marker.trim_start().len()
+            if !summary.is_empty() {
+                let summary_start =
+                    marker_end + after_marker.len() - after_marker.trim_start().len();
+                return Some((
+                    summary_start..summary_start + summary.len(),
+                    SummaryPadding::default(),
+                ));
+            }
+            // An empty summary's text goes after the space following the marker and, in a block
+            // comment, before a space ahead of the closer, as in a new summary.
+            let summary_start = marker_end + after_marker.chars().next().map_or(0, char::len_utf8);
+            let padding = SummaryPadding {
+                before: if after_marker.is_empty() { " " } else { "" },
+                after: if has_closer && after_marker.chars().count() < 2 {
+                    " "
+                } else {
+                    ""
+                },
             };
-            Some(summary_start..summary_start + summary.len())
+            Some((summary_start..summary_start, padding))
         })
 }
 
@@ -471,6 +502,80 @@ mod test {
         assert_eq!(empty_summary("latex").as_deref(), Some("% Σ |"));
         assert_eq!(empty_summary("typst").as_deref(), Some("// Σ |"));
         assert_eq!(empty_summary("json"), None);
+    }
+
+    /// The line of each summary as editing it resumes, with `|` at the cursor and the summary's
+    /// padding inserted.
+    fn entered_summaries(text: &Rope, outline: &Outline) -> Vec<String> {
+        let text = text.slice(..);
+        outline
+            .entries()
+            .iter()
+            .filter_map(|entry| {
+                let OutlineEntryKind::Summary { text_end, padding } = entry.kind else {
+                    return None;
+                };
+                let line = entry.lines.start;
+                let line_end = text.line_to_char(line) + text.line(line).len_chars();
+                let line_end = line_end - get_line_ending(&text.line(line)).map_or(0, |_| 1);
+                Some(format!(
+                    "{}{}|{}{}",
+                    text.slice(text.line_to_char(line)..text_end),
+                    padding.before,
+                    padding.after,
+                    text.slice(text_end..line_end),
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn summaries_are_entered_at_the_end_of_their_text() {
+        let (text, outline) = markdown_outline(indoc! {"
+            <!-- Σ Some text   -->
+            <!--ΣTight-->
+            <!-- Σ  -->
+            <!-- Σ -->
+            <!--Σ-->
+            <!-- Σ     -->
+        "});
+        assert_eq!(
+            entered_summaries(&text, &outline),
+            [
+                "<!-- Σ Some text|   -->",
+                "<!--ΣTight|-->",
+                "<!-- Σ | -->",
+                "<!-- Σ | -->",
+                "<!--Σ | -->",
+                "<!-- Σ |    -->",
+            ]
+        );
+    }
+
+    #[test]
+    fn line_comment_summaries_are_entered_at_the_end_of_their_text() {
+        // No LaTeX outline query exists yet, so this one only captures comments.
+        let text = Rope::from_str("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
+        let language = LOADER.language_for_name("latex").unwrap();
+        let syntax = Syntax::new(text.slice(..), language, &LOADER).unwrap();
+        let query = OutlineQuery::new(
+            syntax.tree().root_node().grammar(),
+            "(line_comment) @comment",
+        )
+        .unwrap();
+        let config = LOADER.language(language).config();
+        let outline = Outline::from_query(text.slice(..), &syntax, &query, config);
+        assert_eq!(
+            entered_summaries(&text, &outline),
+            [
+                "% Σ Some text|  ",
+                "%ΣTight|",
+                "% Σ |",
+                "% Σ |",
+                "%Σ |",
+                "% Σ |  ",
+            ]
+        );
     }
 
     #[test]

@@ -194,6 +194,48 @@ async fn add_summary_on_a_summary_line_moves_into_that_summary() -> anyhow::Resu
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn add_summary_spaces_out_an_empty_summary_like_a_new_one() -> anyhow::Result<()> {
+    for (input, expected) in [
+        (
+            indoc! {"\
+                #[<|]#!-- Σ -->
+                Intro.
+            "},
+            indoc! {"\
+                <!-- Σ #[ |]#-->
+                Intro.
+            "},
+        ),
+        (
+            indoc! {"\
+                #[<|]#!--Σ-->
+                Intro.
+            "},
+            indoc! {"\
+                <!--Σ #[ |]#-->
+                Intro.
+            "},
+        ),
+    ] {
+        test_add_summary((input, ":lang markdown<ret><F3>", expected)).await?;
+    }
+
+    // Typed text is spaced out from the comment syntax.
+    test_add_summary((
+        indoc! {"\
+            #[<|]#!-- Σ -->
+            Intro.
+        "},
+        ":lang markdown<ret><F3>Why",
+        indoc! {"\
+            <!-- Σ Why#[ |]#-->
+            Intro.
+        "},
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn add_summary_splits_a_passage_at_a_later_paragraph() -> anyhow::Result<()> {
     test_add_summary((
         indoc! {"\

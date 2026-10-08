@@ -4069,8 +4069,17 @@ fn add_summary(cx: &mut Context) {
         .entry_at_line(line)
         .or_else(|| outline.summary_above(paragraph.as_ref()?));
     let paragraph = match (summary.map(|summary| summary.kind), paragraph) {
-        (Some(outline::OutlineEntryKind::Summary { text_end }), _) => {
-            doc.set_selection(view.id, Selection::point(text_end));
+        (Some(outline::OutlineEntryKind::Summary { text_end, padding }), _) => {
+            let cursor = Selection::point(text_end + padding.before.len());
+            if padding == outline::SummaryPadding::default() {
+                doc.set_selection(view.id, cursor);
+            } else {
+                let padding = format!("{}{}", padding.before, padding.after);
+                let transaction =
+                    Transaction::insert(doc.text(), &Selection::point(text_end), padding.into())
+                        .with_selection(cursor);
+                doc.apply(&transaction, view.id);
+            }
             enter_insert_mode(cx);
             return;
         }
