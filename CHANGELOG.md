@@ -15,7 +15,12 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 - Neither command is bound by default; map them in `config.toml`.
 - Summaries are highlighted with the new `comment.summary` scope.
 - Both commands read headings and comments from a per-language `outline.scm`
-  query, so far provided only for Markdown.
+  query, provided for Markdown, LaTeX and Typst.
+- Reverse outlining for LaTeX and Typst. LaTeX summaries are `% Σ …`, and
+  `\part` through `\subparagraph` (starred forms included) are headings.
+  Typst summaries are `// Σ …` (or a one-line `/* Σ … */`), and `=` headings
+  are levelled by their number of `=` signs. A `Σ` comment after text on the
+  same line also counts as a summary in these two languages.
 
 ## Diagnostic display toggle
 
