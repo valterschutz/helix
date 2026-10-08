@@ -10,8 +10,9 @@
 //!
 //! Whether a captured comment is a summary is decided here from the language's comment tokens,
 //! so outline queries don't repeat the summary syntax. Highlight and injection queries can't call
-//! into Rust, so Markdown's `highlights.scm` and `injections.scm` and Typst's `highlights.scm`
-//! repeat the summary pattern as a regex that must be kept in step with this module.
+//! into Rust, so Markdown's `highlights.scm` and `injections.scm`, and the `highlights.scm` of
+//! LaTeX and Typst, repeat the summary pattern as a regex that must be kept in step with this
+//! module.
 
 use std::ops::Range;
 
@@ -421,6 +422,10 @@ mod test {
         language_outline("typst", text)
     }
 
+    fn latex_outline(text: &str) -> (Rope, Outline) {
+        language_outline("latex", text)
+    }
+
     fn language_outline(language: &str, text: &str) -> (Rope, Outline) {
         let text = Rope::from_str(text);
         let language = LOADER.language_for_name(language).unwrap();
@@ -683,17 +688,8 @@ mod test {
 
     #[test]
     fn line_comment_summaries_are_entered_at_the_end_of_their_text() {
-        // No LaTeX outline query exists yet, so this one only captures comments.
-        let text = Rope::from_str("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
-        let language = LOADER.language_for_name("latex").unwrap();
-        let syntax = Syntax::new(text.slice(..), language, &LOADER).unwrap();
-        let query = OutlineQuery::new(
-            syntax.tree().root_node().grammar(),
-            "(line_comment) @comment",
-        )
-        .unwrap();
-        let config = LOADER.language(language).config();
-        let outline = Outline::from_query(text.slice(..), &syntax, &query, config);
+        let (text, outline) =
+            latex_outline("% Σ Some text  \n%ΣTight\n% Σ \n% Σ\n%Σ\n% Σ   \nText.\n");
         assert_eq!(
             entered_summaries(&text, &outline),
             [
@@ -705,6 +701,165 @@ mod test {
                 "% Σ |  ",
             ]
         );
+    }
+
+    #[test]
+    fn latex_sectioning_commands_are_chapters_at_successive_levels() {
+        let (_, outline) = latex_outline(indoc! {r"
+            \documentclass{book}
+            \begin{document}
+            \part{One}
+            \chapter{Two}
+            \section{Three}
+            Text.
+            \subsection*{Four}
+            \subsubsection{Five}
+            \paragraph{Six}
+            \subparagraph*{Seven}
+            \chapter*{Two again}
+            \end{document}
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h1 One 2..3
+                  h2 Two 3..4
+                    h3 Three 4..5
+                      h4 Four 6..7
+                        h5 Five 7..8
+                          h6 Six 8..9
+                            h7 Seven 9..10
+                  h2 Two again 10..11
+            "}
+        );
+
+        let (_, outline) = latex_outline("\\section{One}\n\\subsection{Two}\n");
+        assert_eq!(render(&outline), "h3 One 0..1\n  h4 Two 1..2\n");
+    }
+
+    #[test]
+    fn latex_summaries_sit_one_step_under_their_chapter() {
+        let (_, outline) = latex_outline(indoc! {r"
+            % Σ Why this document exists
+            Intro text.
+
+            \section{Background}
+            %Σ The problem
+            Some text.
+              % Σ   An indented passage
+              More text.
+
+            \subsection{Detail}
+
+            % Σ
+            Unsummarised text.
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                Σ Why this document exists 0..1
+                h3 Background 3..4
+                  Σ The problem 4..5
+                  Σ An indented passage 6..7
+                  h4 Detail 9..10
+                    Σ  11..12
+            "}
+        );
+    }
+
+    #[test]
+    fn only_latex_line_comments_starting_with_the_marker_are_summaries() {
+        let (_, outline) = latex_outline(indoc! {r"
+            \section{Notes}
+            % Pass 1: read title and abstract
+            % A question about Σ
+            % ∑ n-ary summation is not the marker
+            \begin{verbatim}
+            % Σ sample code
+            \end{verbatim}
+            \begin{comment}
+            % Σ commented out
+            \end{comment}
+            \iffalse
+            % Σ skipped
+            \fi
+            % Σ The only summary
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {"
+                h3 Notes 0..1
+                  Σ The only summary 13..14
+            "}
+        );
+    }
+
+    #[test]
+    fn latex_summaries_after_text_on_their_line_are_summaries() {
+        // The comment node covers only the comment, not its line, so the outline agrees with
+        // the highlight query, which can't see the text before the comment either.
+        let (_, outline) = latex_outline("Text. % Σ Trailing\n");
+        assert_eq!(render(&outline), "Σ Trailing 0..1\n");
+    }
+
+    #[test]
+    fn latex_chapters_span_their_title_lines() {
+        let (text, outline) = latex_outline(indoc! {r"
+            \section[Short]{A title
+              that \emph{wraps}}\label{sec:wraps}
+            Text.
+            \subsection{}
+            Text.
+        "});
+        assert_eq!(
+            render(&outline),
+            indoc! {r"
+                h3 A title that \emph{wraps} 0..2
+                  h4  3..4
+            "}
+        );
+        let text = text.slice(..);
+        assert_eq!(outline.paragraph_at(text, 1), None);
+        assert_eq!(outline.paragraph_at(text, 2), Some(2..3));
+    }
+
+    #[test]
+    fn latex_chapter_titles_with_math_are_shown_whole() {
+        let (_, outline) = latex_outline("\\section{The $x$ case}\n");
+        assert_eq!(render(&outline), "h3 The $x$ case 0..1\n");
+    }
+
+    #[test]
+    fn latex_passages_and_paragraphs_are_bounded_by_summaries_and_chapters() {
+        let (text, outline) = latex_outline(indoc! {r"
+            % Σ intro
+            Intro.
+            \section{One}
+            % Σ first
+            First a.
+            First b.
+
+            Unsummarised.
+            \section{Two}
+        "});
+        let passages: Vec<_> = outline
+            .passages()
+            .map(|passage| (passage.summary.text.as_str(), passage.lines))
+            .collect();
+        assert_eq!(passages, [("intro", 0..2), ("first", 3..8)]);
+
+        let text = text.slice(..);
+        let summary_above = |line| {
+            let paragraph = outline.paragraph_at(text, line)?;
+            Some(outline.summary_above(&paragraph)?.text.as_str())
+        };
+        assert_eq!(outline.paragraph_at(text, 5), Some(4..6));
+        assert_eq!(summary_above(5), Some("first"));
+        assert_eq!(outline.paragraph_at(text, 7), Some(7..8));
+        assert_eq!(summary_above(7), None);
+        for line in [0, 2, 3, 6, 8] {
+            assert_eq!(outline.paragraph_at(text, line), None);
+        }
     }
 
     #[test]
