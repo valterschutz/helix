@@ -10,6 +10,7 @@ use futures_util::FutureExt;
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{sinks, BinaryDetection, SearcherBuilder};
 use helix_core::{
+    outline::{Outline, OutlineEntry},
     syntax::{Loader, QueryMatchIterEvent},
     Rope, RopeSlice, Selection, Syntax, Uri,
 };
@@ -20,9 +21,11 @@ use helix_stdx::{
 use helix_view::{
     align_view,
     document::{from_reader, SCRATCH_BUFFER_NAME},
+    graphics::Style,
     Align, Document, DocumentId, Editor,
 };
 use ignore::{DirEntry, WalkBuilder, WalkState};
+use tui::text::{Span, Spans};
 
 use crate::{
     filter_picker_entry,
@@ -213,6 +216,68 @@ pub fn syntax_symbol_picker(cx: &mut Context) {
     )
     .with_preview(|_editor, tag| {
         Some((tag.doc.path_or_id()?, Some((tag.start_line, tag.end_line))))
+    })
+    .truncate_start(false);
+
+    cx.push_layer(Box::new(overlaid(picker)));
+}
+
+/// The outline of the current document, or `None` after reporting that its language has none.
+pub(super) fn current_outline(editor: &mut Editor) -> Option<Outline> {
+    let doc = doc!(editor);
+    let loader = editor.syn_loader.load();
+    let outline = doc
+        .syntax()
+        .and_then(|syntax| Outline::new(doc.text().slice(..), syntax, &loader));
+    if outline.is_none() {
+        editor.set_error("No outline available for this buffer's language");
+    }
+    outline
+}
+
+pub fn outline_picker(cx: &mut Context) {
+    let Some(outline) = current_outline(cx.editor) else {
+        return;
+    };
+    let doc_id = doc!(cx.editor).id();
+
+    // The indentation is whitespace, which the fuzzy matcher skips, so filtering matches on the
+    // entry text while filtered entries keep their indentation. An empty summary shows a dimmed
+    // placeholder, which filtering matches like any other entry text.
+    let columns = [PickerColumn::new(
+        "entry",
+        |entry: &OutlineEntry, placeholder_style: &Style| {
+            let indent = Span::raw("  ".repeat(entry.depth));
+            let text = if entry.is_summary() && entry.text.is_empty() {
+                Span::styled("(empty summary)", *placeholder_style)
+            } else {
+                Span::raw(entry.text.as_str())
+            };
+            Spans::from(vec![indent, text]).into()
+        },
+    )];
+
+    let picker = Picker::new(
+        columns,
+        0,
+        outline.entries().to_vec(),
+        cx.editor.theme.get("ui.text.inactive"),
+        move |cx, entry, action| {
+            cx.editor.switch(doc_id, action);
+            let view = view_mut!(cx.editor);
+            let doc = doc_mut!(cx.editor, &doc_id);
+            let line_start = doc.text().line_to_char(entry.lines.start);
+            doc.set_selection(view.id, Selection::point(line_start));
+            if action.align_view(view, doc.id()) {
+                align_view(doc, view, Align::Center)
+            }
+        },
+    )
+    .with_preview(move |_editor, entry| {
+        Some((
+            PathOrId::Id(doc_id),
+            Some((entry.lines.start, entry.lines.end - 1)),
+        ))
     })
     .truncate_start(false);
 

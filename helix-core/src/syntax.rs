@@ -28,7 +28,7 @@ use tree_house::{
     Error, InjectionLanguageMarker, LanguageConfig as SyntaxConfig, Layer,
 };
 
-use crate::{indent::IndentQuery, tree_sitter, ChangeSet, Language};
+use crate::{indent::IndentQuery, outline::OutlineQuery, tree_sitter, ChangeSet, Language};
 
 pub use tree_house::{
     highlighter::{Highlight, HighlightEvent},
@@ -43,6 +43,7 @@ pub struct LanguageData {
     indent_query: OnceCell<Option<IndentQuery>>,
     textobject_query: OnceCell<Option<TextObjectQuery>>,
     tag_query: OnceCell<Option<TagQuery>>,
+    outline_query: OnceCell<Option<OutlineQuery>>,
     rainbow_query: OnceCell<Option<RainbowQuery>>,
 }
 
@@ -54,6 +55,7 @@ impl LanguageData {
             indent_query: OnceCell::new(),
             textobject_query: OnceCell::new(),
             tag_query: OnceCell::new(),
+            outline_query: OnceCell::new(),
             rainbow_query: OnceCell::new(),
         }
     }
@@ -192,6 +194,36 @@ impl LanguageData {
             .get_or_init(|| {
                 let grammar = self.syntax_config(loader)?.grammar;
                 Self::compile_tag_query(grammar, &self.config)
+                    .map_err(|err| {
+                        log::error!("{err}");
+                    })
+                    .ok()
+                    .flatten()
+            })
+            .as_ref()
+    }
+
+    /// Compiles the outline.scm query for a language.
+    /// This function should only be used by this module or the xtask crate.
+    pub fn compile_outline_query(
+        grammar: Grammar,
+        config: &LanguageConfiguration,
+    ) -> Result<Option<OutlineQuery>> {
+        let name = &config.language_id;
+        let text = read_query(name, "outline.scm");
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let outline_query = OutlineQuery::new(grammar, &text)
+            .with_context(|| format!("Failed to compile outline.scm query for '{name}'"))?;
+        Ok(Some(outline_query))
+    }
+
+    fn outline_query(&self, loader: &Loader) -> Option<&OutlineQuery> {
+        self.outline_query
+            .get_or_init(|| {
+                let grammar = self.syntax_config(loader)?.grammar;
+                Self::compile_outline_query(grammar, &self.config)
                     .map_err(|err| {
                         log::error!("{err}");
                     })
@@ -418,6 +450,10 @@ impl Loader {
 
     pub fn tag_query(&self, lang: Language) -> Option<&TagQuery> {
         self.language(lang).tag_query(self)
+    }
+
+    pub fn outline_query(&self, lang: Language) -> Option<&OutlineQuery> {
+        self.language(lang).outline_query(self)
     }
 
     fn rainbow_query(&self, lang: Language) -> Option<&RainbowQuery> {
@@ -1250,6 +1286,222 @@ mod test {
         // The query used in this test case only captures the first line_comment node.
         // Determine if this behavior is intentional in tree-sitter.
         // test("multiple_nodes_grouped", 1..37);
+    }
+
+    /// Returns the innermost highlight scope covering the first occurrence of `needle` in a
+    /// `source` in `language`, with the loader configured for the theme scopes in `scopes`.
+    fn scope_at(language: &str, source: &str, needle: &str, scopes: &[&str]) -> Option<String> {
+        let loader = crate::config::default_lang_loader();
+        loader.set_scopes(scopes.iter().map(|scope| scope.to_string()).collect());
+        let source = Rope::from_str(source);
+        let language = loader.language_for_name(language).unwrap();
+        let syntax = Syntax::new(source.slice(..), language, &loader).unwrap();
+        let target = source.to_string().find(needle).unwrap() as u32;
+
+        let mut highlighter = syntax.highlighter(source.slice(..), &loader, ..);
+        let mut stack = Vec::new();
+        while highlighter.next_event_offset() <= target {
+            let (event, highlights) = highlighter.advance();
+            if event == HighlightEvent::Refresh {
+                stack.clear();
+            }
+            stack.extend(highlights);
+        }
+        stack
+            .last()
+            .map(|highlight| scopes[highlight.idx()].to_string())
+    }
+
+    /// Like [`scope_at`], for a theme that styles both comments and summaries.
+    fn summary_scope_at(language: &str, source: &str, needle: &str) -> Option<String> {
+        scope_at(language, source, needle, &["comment", "comment.summary"])
+    }
+
+    /// Asserts that comments in `language` whose text doesn't start with `Σ` keep the comment
+    /// scope, where `comment` puts a text in the language's comment syntax on its own line.
+    fn assert_unmarked_comments_keep_comment_scope(language: &str, comment: fn(&str) -> String) {
+        for (text, needle) in [
+            // Template instructions without the marker.
+            ("Pass 1: read title", "Pass 1"),
+            // `Σ` somewhere other than first.
+            ("Note Σ later", "Note"),
+            // Whitespace other than spaces and tabs before the marker.
+            ("\u{a0}Σ No-break space", "No-break space"),
+        ] {
+            let source = comment(text);
+            assert_eq!(
+                summary_scope_at(language, &source, needle).as_deref(),
+                Some("comment"),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_summary_has_summary_scope() {
+        assert_eq!(
+            summary_scope_at(
+                "markdown",
+                "# Chapter\n\n<!-- Σ The passage summary -->\nProse.\n",
+                "The passage summary"
+            )
+            .as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("markdown", "<!--Σ-->\n", "Σ").as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at(
+                "markdown",
+                "- Item\n\n  <!-- Σ Indented -->\n  More.\n",
+                "Indented"
+            )
+            .as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("markdown", "Prose.\n<!-- Σ Split -->\nMore.\n", "Split").as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("markdown", "> <!-- Σ Quoted -->\n> More.\n", "Quoted").as_deref(),
+            Some("comment.summary")
+        );
+    }
+
+    #[test]
+    fn markdown_summary_falls_back_to_comment_scope() {
+        let source = "<!-- Σ The passage summary -->\nProse.\n";
+        assert_eq!(
+            scope_at("markdown", source, "The passage summary", &["comment"]).as_deref(),
+            Some("comment")
+        );
+    }
+
+    #[test]
+    fn markdown_non_summary_comments_keep_comment_scope() {
+        assert_unmarked_comments_keep_comment_scope("markdown", |text| {
+            format!("<!-- {text} -->\n")
+        });
+        // Multi-line comments.
+        assert_eq!(
+            summary_scope_at(
+                "markdown",
+                "<!-- Σ first line\nsecond line -->\n",
+                "first line"
+            )
+            .as_deref(),
+            Some("comment")
+        );
+        // Comments inside code blocks.
+        assert_eq!(
+            summary_scope_at("markdown", "```html\n<!-- Σ sample -->\n```\n", "sample").as_deref(),
+            Some("comment")
+        );
+    }
+
+    #[test]
+    fn typst_summary_has_summary_scope() {
+        assert_eq!(
+            summary_scope_at(
+                "typst",
+                "= Chapter\n// Σ The passage\nProse.\n",
+                "The passage"
+            )
+            .as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("typst", "/* Σ Block */\nProse.\n", "Block").as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("typst", "//Σ\n", "Σ").as_deref(),
+            Some("comment.summary")
+        );
+    }
+
+    #[test]
+    fn typst_non_summary_comments_keep_comment_scope() {
+        assert_unmarked_comments_keep_comment_scope("typst", |text| format!("// {text}\n"));
+        // Multi-line comments.
+        assert_eq!(
+            summary_scope_at("typst", "/* Σ first line\nsecond line */\n", "first line").as_deref(),
+            Some("comment")
+        );
+    }
+
+    #[test]
+    fn typst_summaries_in_typst_code_blocks_have_summary_scope() {
+        // A known limitation: a raw block tagged `typ` is injected as Typst, whose highlight
+        // query can't tell that it runs in an injection, so its summaries are highlighted even
+        // though the outline, which only queries the root language, ignores them. A `markdown`
+        // code block in Markdown behaves the same.
+        assert_eq!(
+            summary_scope_at("typst", "```typ\n// Σ sample\n```\n", "sample").as_deref(),
+            Some("comment.summary")
+        );
+    }
+
+    #[test]
+    fn latex_summary_has_summary_scope() {
+        assert_eq!(
+            summary_scope_at(
+                "latex",
+                "\\section{Chapter}\n% Σ The passage summary\nProse.\n",
+                "The passage"
+            )
+            .as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("latex", "%Σ\n", "Σ").as_deref(),
+            Some("comment.summary")
+        );
+        assert_eq!(
+            summary_scope_at("latex", "\tIndented.\n\t% Σ Indented\n", "Σ Indented").as_deref(),
+            Some("comment.summary")
+        );
+        // The outline also takes a comment after text on its line as a summary.
+        assert_eq!(
+            summary_scope_at("latex", "Prose. % Σ Trailing\n", "Trailing").as_deref(),
+            Some("comment.summary")
+        );
+    }
+
+    #[test]
+    fn latex_summary_falls_back_to_comment_scope() {
+        assert_eq!(
+            scope_at(
+                "latex",
+                "% Σ The passage summary\n",
+                "The passage",
+                &["comment"]
+            )
+            .as_deref(),
+            Some("comment")
+        );
+    }
+
+    #[test]
+    fn latex_non_summary_comments_keep_comment_scope() {
+        assert_unmarked_comments_keep_comment_scope("latex", |text| format!("% {text}\n"));
+        // Comments that aren't line comments.
+        assert_eq!(
+            summary_scope_at(
+                "latex",
+                "\\begin{comment}\n% Σ sample\n\\end{comment}\n",
+                "sample"
+            )
+            .as_deref(),
+            Some("comment")
+        );
+        assert_eq!(
+            summary_scope_at("latex", "\\iffalse\n% Σ skipped\n\\fi\n", "skipped").as_deref(),
+            Some("comment")
+        );
     }
 
     #[test]

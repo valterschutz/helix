@@ -68,6 +68,9 @@ _Avoid_: Topic sentence, gist, annotation
 A summary together with everything after it up to the next summary or heading. It may span several paragraphs, lists or other blocks.
 _Avoid_: Paragraph
 
+**Paragraph**:
+A contiguous run of non-blank lines, excluding chapter and summary lines. A passage may contain several.
+
 **Outline**:
 The chapters and summaries of one document, in document order and nested by heading level.
 _Avoid_: Table of contents, symbol list

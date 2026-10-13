@@ -6,6 +6,7 @@ mod goto_char;
 mod insert;
 mod move_lines;
 mod movement;
+mod outline;
 mod reverse_selection_contents;
 mod rotate_selection_contents;
 mod write;

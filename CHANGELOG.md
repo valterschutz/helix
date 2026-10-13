@@ -3,6 +3,25 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## 2026-10-08
+
+- Reverse outlining for Markdown. A summary is a one-line comment marked with
+  `Σ`, such as `<!-- Σ … -->`, placed above the passage it summarises.
+- `outline_picker` lists a document's headings and summaries in order,
+  indented by heading level, and jumps to the chosen one. Empty summaries show
+  as a dimmed placeholder.
+- `add_summary` inserts an empty summary above the paragraph under the cursor
+  and enters insert mode in it, or edits the paragraph's existing summary.
+- Neither command is bound by default; map them in `config.toml`.
+- Summaries are highlighted with the new `comment.summary` scope.
+- Both commands read headings and comments from a per-language `outline.scm`
+  query, provided for Markdown, LaTeX and Typst.
+- Reverse outlining for LaTeX and Typst. LaTeX summaries are `% Σ …`, and
+  `\part` through `\subparagraph` (starred forms included) are headings.
+  Typst summaries are `// Σ …` (or a one-line `/* Σ … */`), and `=` headings
+  are levelled by their number of `=` signs. A `Σ` comment after text on the
+  same line also counts as a summary in these two languages.
+
 ## Diagnostic display toggle
 
 - `:toggle lsp.display-diagnostics` hides/restores diagnostic underlines and

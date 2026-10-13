@@ -14,6 +14,10 @@
   (comment_environment)
 ] @comment
 
+; A summary is a line comment whose text starts with `Σ`.
+((line_comment) @comment.summary
+ (#match? @comment.summary "^%[ \t]*Σ"))
+
 [
   (brack_group)
   (brack_group_argc)
