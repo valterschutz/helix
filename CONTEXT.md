@@ -32,6 +32,24 @@ _Avoid_: Mention, attachment, context file
 A pi skill or prompt template named with a leading `/` in a request, expanded by pi before the model sees the request.
 _Avoid_: Slash command, skill call
 
+## Jumping to Visible Characters
+
+The user types one character they can see and then one or two further keys to move the cursor onto a chosen occurrence of it.
+
+### Language
+
+**Search character**:
+The character the user types to choose which visible positions become jump targets.
+_Avoid_: Query, pattern
+
+**Jump target**:
+A visible position the user can jump to.
+_Avoid_: Candidate, match, hint
+
+**Jump label**:
+The short virtual text drawn over a jump target that the user types to jump there.
+_Avoid_: Symbol, hint, mark
+
 ## Reverse Outlining
 
 A writer states what each passage of a prose document says in a summary, then reads the chapters and summaries in sequence to check the document's structure.

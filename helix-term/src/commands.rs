@@ -50,7 +50,7 @@ use helix_view::{
     expansion,
     info::Info,
     input::KeyEvent,
-    keyboard::KeyCode,
+    keyboard::{KeyCode, KeyModifiers},
     theme::Style,
     tree,
     view::View,
@@ -616,6 +616,8 @@ impl MappableCommand {
         command_palette, "Open command palette",
         goto_word, "Jump to a two-character label",
         extend_to_word, "Extend to a two-character label",
+        goto_char, "Jump to a visible character via a label",
+        extend_to_char, "Extend to a visible character via a label",
         goto_next_tabstop, "Goto next snippet placeholder",
         goto_prev_tabstop, "Goto next snippet placeholder",
         rotate_selections_first, "Make the first selection your primary one",
@@ -7283,7 +7285,78 @@ fn extend_to_word(cx: &mut Context) {
     jump_to_word(cx, Movement::Extend)
 }
 
+/// The jump targets of one jump, together with what the jump does once a
+/// target is chosen.
+#[derive(Clone)]
+struct JumpTargets {
+    /// Target ranges ordered by distance from the cursor. A forward range
+    /// (anchor before head) lies after the cursor, a backward one before it.
+    ranges: Vec<Range>,
+    behaviour: Movement,
+    primary_selection: Range,
+    view_id: ViewId,
+    doc_id: DocumentId,
+}
+
+impl JumpTargets {
+    fn new(cx: &mut Context, ranges: Vec<Range>, behaviour: Movement) -> Self {
+        let (view, doc) = current_ref!(cx.editor);
+        Self {
+            ranges,
+            behaviour,
+            primary_selection: doc.selection(view.id).primary(),
+            view_id: view.id,
+            doc_id: doc.id(),
+        }
+    }
+
+    /// Move or extend the selection to the target at `index`, if it exists.
+    fn jump(&self, cx: &mut Context, index: usize) {
+        let Some(mut range) = self.ranges.get(index).copied() else {
+            return;
+        };
+        range = if self.behaviour == Movement::Extend {
+            let anchor = if range.anchor < range.head {
+                let from = self.primary_selection.from();
+                if range.anchor < from {
+                    range.anchor
+                } else {
+                    from
+                }
+            } else {
+                let to = self.primary_selection.to();
+                if range.anchor > to {
+                    range.anchor
+                } else {
+                    to
+                }
+            };
+            Range::new(anchor, range.head)
+        } else {
+            range.with_direction(Direction::Forward)
+        };
+        let doc = doc_mut!(cx.editor, &self.doc_id);
+        let view = view_mut!(cx.editor, self.view_id);
+        push_jump(view, doc);
+        doc.set_selection(self.view_id, range.into());
+    }
+}
+
+/// Label every target with two characters from the jump label alphabet and
+/// jump to the target whose label is typed.
 fn jump_to_label(cx: &mut Context, labels: Vec<Range>, behaviour: Movement) {
+    jump_to_label_of_len(cx, labels, behaviour, 2)
+}
+
+/// Label every target with `label_len` characters (one or two) from the jump
+/// label alphabet and jump to the target whose label is typed.
+fn jump_to_label_of_len(
+    cx: &mut Context,
+    labels: Vec<Range>,
+    behaviour: Movement,
+    label_len: usize,
+) {
+    debug_assert!(label_len == 1 || label_len == 2);
     let doc = doc!(cx.editor);
     let alphabet = &cx.editor.config().jump_label_alphabet;
     if labels.is_empty() {
@@ -7301,24 +7374,31 @@ fn jump_to_label(cx: &mut Context, labels: Vec<Range>, behaviour: Movement) {
         .iter()
         .enumerate()
         .flat_map(|(i, range)| {
-            [
-                Overlay::new(range.from(), alphabet_char(i / alphabet.len())),
-                Overlay::new(
-                    graphemes::next_grapheme_boundary(text, range.from()),
-                    alphabet_char(i % alphabet.len()),
-                ),
-            ]
+            let first = range.from();
+            if label_len == 1 {
+                vec![Overlay::new(first, alphabet_char(i))]
+            } else {
+                vec![
+                    Overlay::new(first, alphabet_char(i / alphabet.len())),
+                    Overlay::new(
+                        graphemes::next_grapheme_boundary(text, first),
+                        alphabet_char(i % alphabet.len()),
+                    ),
+                ]
+            }
         })
         .collect();
     overlays.sort_unstable_by_key(|overlay| overlay.char_idx);
+    let targets = JumpTargets::new(cx, labels, behaviour);
     let (view, doc) = current!(cx.editor);
     doc.set_jump_labels(view.id, overlays);
 
-    // Accept two characters matching a visible label. Jump to the candidate
-    // for that label if it exists.
-    let primary_selection = doc.selection(view.id).primary();
-    let view_id = view.id;
-    let doc = doc.id();
+    read_jump_label(cx, targets, 0, label_len);
+}
+
+/// Accept the next `remaining` characters of a jump label, `prefix` being the
+/// index encoded by the characters read so far. Any other key cancels.
+fn read_jump_label(cx: &mut Context, targets: JumpTargets, prefix: usize, remaining: usize) {
     cx.on_next_key(move |cx, event| {
         let alphabet = &cx.editor.config().jump_label_alphabet;
         let Some(i) = event
@@ -7326,52 +7406,21 @@ fn jump_to_label(cx: &mut Context, labels: Vec<Range>, behaviour: Movement) {
             .filter(|_| event.modifiers.is_empty())
             .and_then(|ch| alphabet.iter().position(|&it| it == ch))
         else {
-            doc_mut!(cx.editor, &doc).remove_jump_labels(view_id);
+            doc_mut!(cx.editor, &targets.doc_id).remove_jump_labels(targets.view_id);
             return;
         };
-        let outer = i * alphabet.len();
-        // Bail if the given character cannot be a jump label.
-        if outer > labels.len() {
-            doc_mut!(cx.editor, &doc).remove_jump_labels(view_id);
+        let index = prefix * alphabet.len() + i;
+        if remaining == 1 {
+            doc_mut!(cx.editor, &targets.doc_id).remove_jump_labels(targets.view_id);
+            targets.jump(cx, index);
             return;
         }
-        cx.on_next_key(move |cx, event| {
-            doc_mut!(cx.editor, &doc).remove_jump_labels(view_id);
-            let alphabet = &cx.editor.config().jump_label_alphabet;
-            let Some(inner) = event
-                .char()
-                .filter(|_| event.modifiers.is_empty())
-                .and_then(|ch| alphabet.iter().position(|&it| it == ch))
-            else {
-                return;
-            };
-            if let Some(mut range) = labels.get(outer + inner).copied() {
-                range = if behaviour == Movement::Extend {
-                    let anchor = if range.anchor < range.head {
-                        let from = primary_selection.from();
-                        if range.anchor < from {
-                            range.anchor
-                        } else {
-                            from
-                        }
-                    } else {
-                        let to = primary_selection.to();
-                        if range.anchor > to {
-                            range.anchor
-                        } else {
-                            to
-                        }
-                    };
-                    Range::new(anchor, range.head)
-                } else {
-                    range.with_direction(Direction::Forward)
-                };
-                let doc = doc_mut!(cx.editor, &doc);
-                let view = view_mut!(cx.editor, view_id);
-                push_jump(view, doc);
-                doc.set_selection(view_id, range.into());
-            }
-        });
+        // Bail if the given character cannot start a jump label.
+        if index * alphabet.len() > targets.ranges.len() {
+            doc_mut!(cx.editor, &targets.doc_id).remove_jump_labels(targets.view_id);
+            return;
+        }
+        read_jump_label(cx, targets, index, remaining - 1);
     });
 }
 
@@ -7471,6 +7520,88 @@ fn jump_to_word(cx: &mut Context, behaviour: Movement) {
         }
     }
     jump_to_label(cx, words, behaviour)
+}
+
+fn goto_char(cx: &mut Context) {
+    jump_to_char(cx, Movement::Move)
+}
+
+fn extend_to_char(cx: &mut Context) {
+    jump_to_char(cx, Movement::Extend)
+}
+
+/// Read a search character, label every visible occurrence of it and jump
+/// to the one whose label is typed.
+fn jump_to_char(cx: &mut Context, behaviour: Movement) {
+    cx.on_next_key(move |cx, event| {
+        let modifiers = event.modifiers.difference(KeyModifiers::SHIFT);
+        let search = match event.code {
+            _ if !modifiers.is_empty() => return,
+            KeyCode::Char(ch) => ch,
+            KeyCode::Enter => '\n',
+            KeyCode::Tab => '\t',
+            _ => return,
+        };
+        // Smart case: a lowercase search character matches both cases.
+        let case_insensitive = !search.is_uppercase();
+        let matches = move |ch: char| match search {
+            ' ' => ch.is_whitespace() && ch != '\n' && ch != '\r',
+            _ => {
+                ch == search || (case_insensitive && ch.to_lowercase().eq(std::iter::once(search)))
+            }
+        };
+
+        let alphabet = &cx.editor.config().jump_label_alphabet;
+        if alphabet.is_empty() {
+            return;
+        }
+        let jump_label_limit = alphabet.len() * alphabet.len();
+        let (view, doc) = current_ref!(cx.editor);
+        let text = doc.text().slice(..);
+
+        // This is not necessarily exact if there is virtual text like soft wrap.
+        // It's ok though because the extra jump labels will not be rendered.
+        let start = text.line_to_char(text.char_to_line(doc.view_offset(view.id).anchor));
+        let end = text.line_to_char(view.estimate_last_doc_line(doc) + 1);
+        let cursor = doc.selection(view.id).primary().cursor(text);
+
+        // Targets after the cursor as forward ranges in document order and
+        // targets before it as backward ranges in reverse document order.
+        let mut forward = Vec::new();
+        let mut backward = Vec::new();
+        let mut pos = start;
+        for grapheme in text.slice(start..end).graphemes() {
+            let next = pos + grapheme.len_chars();
+            if pos != cursor && grapheme.chars().next().is_some_and(matches) {
+                if pos > cursor {
+                    forward.push(Range::new(pos, next));
+                } else {
+                    backward.push(Range::new(next, pos));
+                }
+            }
+            pos = next;
+        }
+        backward.reverse();
+
+        // Interleave so that the targets nearest the cursor get the first labels.
+        let mut forward = forward.into_iter();
+        let mut backward = backward.into_iter();
+        let mut ranges = Vec::new();
+        while ranges.len() < jump_label_limit {
+            match (forward.next(), backward.next()) {
+                (None, None) => break,
+                (fwd, bwd) => ranges.extend(fwd.into_iter().chain(bwd)),
+            }
+        }
+        ranges.truncate(jump_label_limit);
+
+        match ranges.len() {
+            0 => cx.editor.set_status("No matching character on screen"),
+            1 => JumpTargets::new(cx, ranges, behaviour).jump(cx, 0),
+            n if n <= alphabet.len() => jump_to_label_of_len(cx, ranges, behaviour, 1),
+            _ => jump_to_label_of_len(cx, ranges, behaviour, 2),
+        }
+    });
 }
 
 fn lsp_or_syntax_symbol_picker(cx: &mut Context) {

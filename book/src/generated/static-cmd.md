@@ -313,6 +313,8 @@
 | `command_palette` | Open command palette | normal: `` <space>? ``, select: `` <space>? `` |
 | `goto_word` | Jump to a two-character label | normal: `` gw `` |
 | `extend_to_word` | Extend to a two-character label | select: `` gw `` |
+| `goto_char` | Jump to a visible character via a label |  |
+| `extend_to_char` | Extend to a visible character via a label |  |
 | `goto_next_tabstop` | Goto next snippet placeholder |  |
 | `goto_prev_tabstop` | Goto next snippet placeholder |  |
 | `rotate_selections_first` | Make the first selection your primary one |  |
