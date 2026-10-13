@@ -120,13 +120,6 @@ impl EditorView {
             Self::doc_syntax_highlighter(doc, view_offset.anchor, inner.height, &loader);
         let mut overlays = Vec::new();
 
-        overlays.push(Self::overlay_syntax_highlights(
-            doc,
-            view_offset.anchor,
-            inner.height,
-            &text_annotations,
-        ));
-
         if doc
             .language_config()
             .and_then(|config| config.rainbow_brackets)
@@ -168,6 +161,15 @@ impl EditorView {
                 overlays.push(overlay);
             }
         }
+
+        // Grapheme overlays (jump labels) go last so their style patches over
+        // the selection, cursor and diagnostics instead of being hidden by them.
+        overlays.push(Self::overlay_syntax_highlights(
+            doc,
+            view_offset.anchor,
+            inner.height,
+            &text_annotations,
+        ));
 
         let gutter_overflow = view.gutter_offset(doc) == 0;
         if !gutter_overflow {

@@ -12,6 +12,9 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
   targets fit `jump-label-alphabet` and two letters otherwise, nearest the
   cursor first; a single target is jumped to immediately. Neither command is
   bound by default; `goto_word` is unchanged.
+- Jump labels are drawn on top of selections, cursors and diagnostics, so a
+  label inside a selection keeps its `ui.virtual.jump-label` style instead of
+  taking on `ui.selection`.
 
 ## 2026-10-08
 
