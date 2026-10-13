@@ -3,6 +3,16 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## 2026-10-13
+
+- `goto_char` and `extend_to_char` jump to any visible character. Type one
+  search character, then the jump label drawn over the occurrence you want.
+  A lowercase search character matches both cases, Enter targets line ends
+  and Space targets whitespace within lines. Labels are one letter while the
+  targets fit `jump-label-alphabet` and two letters otherwise, nearest the
+  cursor first; a single target is jumped to immediately. Neither command is
+  bound by default; `goto_word` is unchanged.
+
 ## 2026-10-08
 
 - Reverse outlining for Markdown. A summary is a one-line comment marked with
