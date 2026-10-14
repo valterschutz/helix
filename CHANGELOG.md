@@ -3,6 +3,13 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## 2026-10-14
+
+- `goto_buffer_1` through `goto_buffer_9` switch to the buffer at that
+  position in the bufferline, counting from 1. A position past the last open
+  buffer leaves the view unchanged and reports an error. `goto_last_buffer`
+  switches to the rightmost buffer. None are bound by default.
+
 ## 2026-10-13
 
 - `goto_char` and `extend_to_char` jump to any visible character. Type one
