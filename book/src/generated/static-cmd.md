@@ -164,6 +164,16 @@
 | `extend_to_column` | Extend to column | select: `` g\| `` |
 | `goto_next_buffer` | Goto next buffer | normal: `` gn ``, select: `` gn `` |
 | `goto_previous_buffer` | Goto previous buffer | normal: `` gp ``, select: `` gp `` |
+| `goto_buffer_1` | Goto buffer 1 |  |
+| `goto_buffer_2` | Goto buffer 2 |  |
+| `goto_buffer_3` | Goto buffer 3 |  |
+| `goto_buffer_4` | Goto buffer 4 |  |
+| `goto_buffer_5` | Goto buffer 5 |  |
+| `goto_buffer_6` | Goto buffer 6 |  |
+| `goto_buffer_7` | Goto buffer 7 |  |
+| `goto_buffer_8` | Goto buffer 8 |  |
+| `goto_buffer_9` | Goto buffer 9 |  |
+| `goto_last_buffer` | Goto last buffer |  |
 | `goto_line_end_newline` | Goto newline at line end | insert: `` <end> `` |
 | `goto_first_nonwhitespace` | Goto first non-blank in line | normal: `` gs ``, select: `` gs `` |
 | `trim_selections` | Trim whitespace from selections | normal: `` _ ``, select: `` _ `` |

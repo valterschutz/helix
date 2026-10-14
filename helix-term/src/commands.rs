@@ -467,6 +467,16 @@ impl MappableCommand {
         extend_to_column, "Extend to column",
         goto_next_buffer, "Goto next buffer",
         goto_previous_buffer, "Goto previous buffer",
+        goto_buffer_1, "Goto buffer 1",
+        goto_buffer_2, "Goto buffer 2",
+        goto_buffer_3, "Goto buffer 3",
+        goto_buffer_4, "Goto buffer 4",
+        goto_buffer_5, "Goto buffer 5",
+        goto_buffer_6, "Goto buffer 6",
+        goto_buffer_7, "Goto buffer 7",
+        goto_buffer_8, "Goto buffer 8",
+        goto_buffer_9, "Goto buffer 9",
+        goto_last_buffer, "Goto last buffer",
         goto_line_end_newline, "Goto newline at line end",
         goto_first_nonwhitespace, "Goto first non-blank in line",
         trim_selections, "Trim whitespace from selections",
@@ -967,6 +977,56 @@ fn goto_next_buffer(cx: &mut Context) {
 
 fn goto_previous_buffer(cx: &mut Context) {
     goto_buffer(cx.editor, Direction::Backward, cx.count());
+}
+
+fn goto_buffer_1(cx: &mut Context) {
+    goto_buffer_number(cx.editor, 1);
+}
+
+fn goto_buffer_2(cx: &mut Context) {
+    goto_buffer_number(cx.editor, 2);
+}
+
+fn goto_buffer_3(cx: &mut Context) {
+    goto_buffer_number(cx.editor, 3);
+}
+
+fn goto_buffer_4(cx: &mut Context) {
+    goto_buffer_number(cx.editor, 4);
+}
+
+fn goto_buffer_5(cx: &mut Context) {
+    goto_buffer_number(cx.editor, 5);
+}
+
+fn goto_buffer_6(cx: &mut Context) {
+    goto_buffer_number(cx.editor, 6);
+}
+
+fn goto_buffer_7(cx: &mut Context) {
+    goto_buffer_number(cx.editor, 7);
+}
+
+fn goto_buffer_8(cx: &mut Context) {
+    goto_buffer_number(cx.editor, 8);
+}
+
+fn goto_buffer_9(cx: &mut Context) {
+    goto_buffer_number(cx.editor, 9);
+}
+
+fn goto_last_buffer(cx: &mut Context) {
+    let id = *cx.editor.documents.keys().next_back().unwrap();
+    cx.editor.switch(id, Action::Replace);
+}
+
+/// Switch to the `number`th buffer (1-based) in bufferline order.
+fn goto_buffer_number(editor: &mut Editor, number: usize) {
+    let count = editor.documents.len();
+    match editor.documents.keys().nth(number - 1) {
+        Some(&id) => editor.switch(id, Action::Replace),
+        None => editor.set_error(format!("no buffer {number}: only {count} open")),
+    }
 }
 
 fn goto_buffer(editor: &mut Editor, direction: Direction, count: usize) {

@@ -2,6 +2,7 @@ use helix_term::application::Application;
 
 use super::*;
 
+mod goto_buffer_index;
 mod goto_char;
 mod insert;
 mod move_lines;
