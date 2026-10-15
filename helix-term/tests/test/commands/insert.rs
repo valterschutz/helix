@@ -61,6 +61,36 @@ async fn insert_newline_python_scope_end() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn insert_newline_after_python_subscript() -> anyhow::Result<()> {
+    for (initial, expected) in [
+        (
+            "Fn = Callable[\n    [A, B], C\n]#[|\n]#",
+            "Fn = Callable[\n    [A, B], C\n]\n#[|\n]#",
+        ),
+        ("type Fn = list[int]#[|\n]#", "type Fn = list[int]\n#[|\n]#"),
+        (
+            "type Fn = Callable[\n    [A, B], C\n]#[|\n]#",
+            "type Fn = Callable[\n    [A, B], C\n]\n#[|\n]#",
+        ),
+        (
+            "type Fn = Callable[\n    [A, B], C\n]#[|\n]#\n\ndef f():\n    pass\n",
+            "type Fn = Callable[\n    [A, B], C\n]\n#[|\n]#\n\ndef f():\n    pass\n",
+        ),
+        (
+            "def f():\n    type Fn = Callable[\n        [A, B], C\n    ]#[|\n]#",
+            "def f():\n    type Fn = Callable[\n        [A, B], C\n    ]\n    #[|\n]#",
+        ),
+        (
+            "type Fn = Callable[#[|\n]#    [A, B], C\n]\n",
+            "type Fn = Callable[\n    #[|\n]#    [A, B], C\n]\n",
+        ),
+    ] {
+        test((initial, ":lang python<ret>i<ret>", expected)).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn insert_newline_many_selections() -> anyhow::Result<()> {
     test((
         indoc! {"\

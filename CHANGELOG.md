@@ -5,6 +5,13 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
 ## 2026-10-15
 
+- Keep the line after a multi-line Python subscript or `type` alias at the
+  statement's indentation. Python's indent query did not open a scope for
+  `subscript` or `type_parameter` brackets, so the hybrid heuristic copied the
+  bracket contents' indentation onto the line after the closing `]` (e.g.
+  `Callable[\n    [A], B\n]` followed by Enter). Mark both nodes `@indent`, as
+  the query already does for lists and argument lists. Snakemake, Starlark and
+  Mojo inherit the change.
 - Restore newline indentation at the end of Python functions and nested blocks.
   The fork's containment rewrite selected `@extend` scopes but then discarded
   their indentation because their parsed end preceded the new line. Honor that

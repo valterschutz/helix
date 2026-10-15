@@ -3,6 +3,8 @@
   (tuple)
   (dictionary)
   (set)
+  (subscript)
+  (type_parameter)
 
   (if_statement)
   (for_statement)

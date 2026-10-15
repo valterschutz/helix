@@ -5,6 +5,14 @@ from typing import (
 )
 
 
+type Handler = Callable[
+    [int, str], bool
+]
+Callback = Callable[
+    [int], None
+]
+
+
 class Example:
     attribute = 1
 
