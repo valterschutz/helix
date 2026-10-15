@@ -50,6 +50,17 @@ _Avoid_: Candidate, match, hint
 The short virtual text drawn over a jump target that the user types to jump there.
 _Avoid_: Symbol, hint, mark
 
+## Blank Lines Around Selections
+
+### Language
+
+**Blank line**:
+A line containing no text other than spaces or tabs. The empty position after a file's final line ending is not a separate blank line.
+_Avoid_: Newline (a line ending rather than an empty line)
+
+**Adjacent blank line**:
+A blank line immediately before the first line or after the last line touched by a selection.
+
 ## Reverse Outlining
 
 A writer states what each passage of a prose document says in a summary, then reads the chapters and summaries in sequence to check the document's structure.

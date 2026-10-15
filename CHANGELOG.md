@@ -3,6 +3,14 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## 2026-10-15
+
+- `remove_blank_line_above` / `remove_blank_line_below` remove adjacent blank
+  lines around every selection while preserving selected text. Counts remove
+  up to that many consecutive blank lines, stopping at text, file boundaries,
+  or another selection. Spaces/tabs-only lines count as blank. Unbound by
+  default; personal config uses `{ Space` / `} Space` in normal/select modes.
+
 ## 2026-10-14
 
 - `goto_buffer_1` through `goto_buffer_9` switch to the buffer at that

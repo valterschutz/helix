@@ -8,6 +8,7 @@ mod insert;
 mod move_lines;
 mod movement;
 mod outline;
+mod remove_blank_lines;
 mod reverse_selection_contents;
 mod rotate_selection_contents;
 mod write;
