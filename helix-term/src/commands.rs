@@ -434,6 +434,8 @@ impl MappableCommand {
         goto_declaration, "Goto declaration",
         add_newline_above, "Add newline above",
         add_newline_below, "Add newline below",
+        remove_blank_line_above, "Remove adjacent blank lines above selections (count supported)",
+        remove_blank_line_below, "Remove adjacent blank lines below selections (count supported)",
         goto_type_definition, "Goto type definition",
         goto_implementation, "Goto implementation",
         goto_file_start, "Goto line number `<n>` else file start",
@@ -7204,6 +7206,73 @@ fn add_newline_impl(cx: &mut Context, open: Open) {
     });
 
     let transaction = Transaction::change(text, changes);
+    doc.apply(&transaction, view.id);
+}
+
+fn remove_blank_line_above(cx: &mut Context) {
+    remove_blank_line_impl(cx, Open::Above);
+}
+
+fn remove_blank_line_below(cx: &mut Context) {
+    remove_blank_line_impl(cx, Open::Below);
+}
+
+fn remove_blank_line_impl(cx: &mut Context, open: Open) {
+    let count = cx.count();
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text();
+    let slice = text.slice(..);
+    let selected_lines: Vec<_> = doc
+        .selection(view.id)
+        .iter()
+        .map(|range| range.line_range(slice))
+        .collect();
+    let mut deletions = Vec::new();
+
+    for &(start, end) in &selected_lines {
+        let mut adjacent = match open {
+            Open::Above => start.checked_sub(1),
+            Open::Below => Some(end + 1),
+        };
+        for _ in 0..count {
+            let Some(line) = adjacent.filter(|&line| line < text.len_lines()) else {
+                break;
+            };
+            // Never consume another selection, even if it contains only whitespace.
+            if selected_lines
+                .iter()
+                .any(|&(start, end)| start <= line && line <= end)
+            {
+                break;
+            }
+            let content = text.line(line);
+            // The empty line after a final line ending is not a removable line.
+            if content.len_chars() == 0
+                || !helix_core::line_ending::line_without_line_ending(&slice, line)
+                    .chars()
+                    .all(|c| matches!(c, ' ' | '\t'))
+            {
+                break;
+            }
+            let from = text.line_to_char(line);
+            deletions.push((from, from + content.len_chars()));
+            adjacent = match open {
+                Open::Above => line.checked_sub(1),
+                Open::Below => Some(line + 1),
+            };
+        }
+    }
+
+    // Several selections can target the same blank lines. Delete each only once.
+    deletions.sort_unstable();
+    deletions.dedup();
+    if deletions.is_empty() {
+        return;
+    }
+    let transaction = Transaction::change(
+        text,
+        deletions.into_iter().map(|(from, to)| (from, to, None)),
+    );
     doc.apply(&transaction, view.id);
 }
 
