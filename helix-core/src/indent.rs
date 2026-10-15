@@ -672,6 +672,7 @@ fn query_indents<'a>(
 /// Handle extend queries. deepest_preceding is the deepest descendant of node that directly precedes the cursor position.
 /// Any ancestor of deepest_preceding which is also a descendant of node may be "extended". In that case, node will be updated,
 /// so that the indent computation starts with the correct syntax node.
+/// Returns whether a preceding scope was extended to the cursor.
 fn extend_nodes<'a>(
     node: &mut Node<'a>,
     mut deepest_preceding: Node<'a>,
@@ -680,7 +681,7 @@ fn extend_nodes<'a>(
     line: usize,
     tab_width: usize,
     indent_width: usize,
-) {
+) -> bool {
     let mut stop_extend = false;
 
     while deepest_preceding != *node {
@@ -727,15 +728,16 @@ fn extend_nodes<'a>(
             stop_extend = false;
         } else if extend_node && !stop_extend {
             *node = deepest_preceding.clone();
-            break;
+            return true;
         }
         // If the tree contains a syntax error, `deepest_preceding` may not
         // have a parent despite being a descendant of `node`.
         deepest_preceding = match deepest_preceding.parent() {
             Some(parent) => parent,
-            None => return,
+            None => return false,
         }
     }
+    false
 }
 
 /// When a newline is typed after a header (`while (c)`, `if x:`), the body it
@@ -792,7 +794,8 @@ fn candidate_body_for_new_line<'a>(
 
 /// Prepare an indent query by computing:
 /// - The node from which to start the query (this is non-trivial due to `@extend` captures)
-/// - The indent captures for all relevant nodes.
+/// - The indent captures for all relevant nodes and opaque ranges.
+/// - Whether the starting scope was extended beyond its parsed end.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 fn init_indent_query<'a, 'b>(
@@ -808,6 +811,7 @@ fn init_indent_query<'a, 'b>(
     Node<'a>,
     HashMap<usize, Vec<IndentCapture<'b>>>,
     Vec<std::ops::Range<u32>>,
+    bool,
 )> {
     // The innermost tree-sitter node which is considered for the indent
     // computation. It may change if some preceding node is extended
@@ -868,10 +872,12 @@ fn init_indent_query<'a, 'b>(
         .map(|body| node = body.clone())
         .is_some();
 
-    // Check for extend captures, potentially changing the node that the indent calculation starts with
+    // Check for extend captures, potentially changing the node that the indent calculation starts with.
+    // Containment must also know that this scope now reaches the target line.
+    let mut extended = false;
     if let Some(deepest_preceding) = deepest_preceding {
         if !descended {
-            extend_nodes(
+            extended = extend_nodes(
                 &mut node,
                 deepest_preceding,
                 &extend_captures,
@@ -882,7 +888,7 @@ fn init_indent_query<'a, 'b>(
             );
         }
     }
-    Some((node, query_result.indent_captures, opaque_ranges))
+    Some((node, query_result.indent_captures, opaque_ranges, extended))
 }
 
 /// Use the syntax tree to determine the indentation for a given position.
@@ -1060,7 +1066,7 @@ fn containment_accounting<'a>(
     // Reuse the standard setup: this applies @extend repositioning / body-descent
     // and returns the per-node capture map (all ancestors of the cursor intersect
     // the query range, so their captures are present).
-    let (start_node, captures, opaque_ranges) = init_indent_query(
+    let (start_node, captures, opaque_ranges, extended) = init_indent_query(
         query,
         root,
         text,
@@ -1135,7 +1141,10 @@ fn containment_accounting<'a>(
             };
             // A scope contains the target line if it opens before it and closes on
             // or after it.
-            let contains = start < target_line && target_line <= end;
+            // An @extend-selected scope and its ancestors contain the target
+            // even beyond their parsed end. Keep the selection made by
+            // extend_nodes, including @extend.prevent-once for terminal statements.
+            let contains = start < target_line && (target_line <= end || extended);
             // A token-style outdent (`}`, `else`, `case`) sits on the line it
             // dedents.
             let opens_target = node_start == target_line;
