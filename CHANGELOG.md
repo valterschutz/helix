@@ -5,6 +5,12 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
 ## 2026-10-15
 
+- Restore newline indentation at the end of Python functions and nested blocks.
+  The fork's containment rewrite selected `@extend` scopes but then discarded
+  their indentation because their parsed end preceded the new line. Honor that
+  existing extension decision, including `@extend.prevent-once` dedentation after
+  terminal statements. This repairs the rewrite's regression without changing
+  upstream's extension policy or replacing the indentation engine again.
 - `remove_blank_line_above` / `remove_blank_line_below` remove adjacent blank
   lines around every selection while preserving selected text. Counts remove
   up to that many consecutive blank lines, stopping at text, file boundaries,

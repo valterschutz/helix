@@ -20,6 +20,47 @@ async fn change_line_above_comment() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn insert_newline_python_scope_end() -> anyhow::Result<()> {
+    for (initial, expected) in [
+        (
+            "def example():\n    value = 1#[|\n]#",
+            "def example():\n    value = 1\n    #[|\n]#",
+        ),
+        (
+            "def example():\n    value = 1   #[|\n]#",
+            "def example():\n    value = 1\n    #[|\n]#",
+        ),
+        (
+            "def example():\n    if ready:\n        value = 1#[|\n]#",
+            "def example():\n    if ready:\n        value = 1\n        #[|\n]#",
+        ),
+        (
+            "def example():\n    value = 1#[|\n]#    value = 2\n",
+            "def example():\n    value = 1\n    #[|\n]#    value = 2\n",
+        ),
+        (
+            "def example():\n    return 1#[|\n]#",
+            "def example():\n    return 1\n#[|\n]#",
+        ),
+        (
+            "def example():\n    if ready:\n        return 1#[|\n]#",
+            "def example():\n    if ready:\n        return 1\n    #[|\n]#",
+        ),
+        (
+            "def example():\n    pass#[|\n]#",
+            "def example():\n    pass\n#[|\n]#",
+        ),
+        (
+            "values = [\n    1,\n]#[|\n]#",
+            "values = [\n    1,\n]\n#[|\n]#",
+        ),
+    ] {
+        test((initial, ":lang python<ret>i<ret>", expected)).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn insert_newline_many_selections() -> anyhow::Result<()> {
     test((
         indoc! {"\
