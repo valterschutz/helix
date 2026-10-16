@@ -85,3 +85,30 @@ A contiguous run of non-blank lines, excluding chapter and summary lines. A pass
 **Outline**:
 The chapters and summaries of one document, in document order and nested by heading level.
 _Avoid_: Table of contents, symbol list
+
+## Staging Changes
+
+The user moves individual changes of the open file into or out of Git's index and commits what the index holds, without leaving the editor.
+
+### Language
+
+**Change**:
+A contiguous run of lines in the open file that differs from the committed version. It is what the diff gutter marks and what the change navigation commands move between.
+_Avoid_: Hunk (the diff tool's and Git's word, not Helix's)
+
+**Staging state**:
+Where a change's lines sit relative to the index: staged, partly staged, or unstaged. Shown in the diff gutter.
+_Avoid_: Stage status
+
+**Stage**:
+Move a change's unstaged lines into the index. A partly staged change becomes staged.
+
+**Unstage**:
+Move a change's staged lines out of the index. A partly staged change becomes unstaged.
+
+**Discard**:
+Revert a change's unstaged lines in the open file. A fully staged change is refused rather than reverted.
+_Avoid_: Reset (overloaded by Git)
+
+**Commit**:
+Record everything the index holds, across the whole repository, under a one-line message.
