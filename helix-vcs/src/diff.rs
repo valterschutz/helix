@@ -181,6 +181,28 @@ impl Diff<'_> {
         self.diff.index.as_ref()
     }
 
+    /// The index→document changes that touch `hunk`, a change of this diff: the lines of `hunk`
+    /// not yet in the index. Empty without index content or when `hunk` is fully staged.
+    pub fn unstaged_hunks_touching(&self, hunk: &Hunk) -> Vec<Hunk> {
+        self.diff
+            .unstaged
+            .iter()
+            .filter(|u| staging::touches(&u.after, &hunk.after))
+            .cloned()
+            .collect()
+    }
+
+    /// The base→index changes that touch `hunk`, a change of this diff: the lines of `hunk`
+    /// already in the index. Empty without index content or when `hunk` is fully unstaged.
+    pub fn staged_hunks_touching(&self, hunk: &Hunk) -> Vec<Hunk> {
+        self.diff
+            .staged
+            .iter()
+            .filter(|s| staging::touches(&s.before, &hunk.before))
+            .cloned()
+            .collect()
+    }
+
     /// Where the `n`th change sits relative to the index. `None` when the index content is
     /// unknown, the diff is inverted, or there is no `n`th change.
     pub fn staging_state(&self, n: u32) -> Option<StagingState> {

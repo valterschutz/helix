@@ -3,6 +3,35 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## 2026-10-16
+
+- Stage, unstage, discard and commit changes from the editor, mirroring the
+  staging-aware review in the hunk fork. `:stage-diff-change` and
+  `:unstage-diff-change` move the changes intersecting any selection into or
+  out of the Git index; a partly staged change is completed in the requested
+  direction. Both refuse a buffer with unsaved modifications, since the index
+  would otherwise run ahead of the file on disk. A file not yet in HEAD has no
+  changes to pick from and is staged or unstaged whole. `:commit` records the
+  index for the repository containing the current file after a one-line
+  prompt (history register `C`; a message given as arguments is used
+  directly), refuses an empty index or message, re-offers a message whose
+  commit failed, and reports the new HEAD. Neither command is bound by
+  default; personal config puts them under `Space Space g`.
+- `:reset-diff-change` is staging-aware: it reverts the unstaged lines of each
+  selected change to the index version and skips fully staged changes, where
+  upstream reverts the whole change to HEAD regardless of what the index
+  holds. Unstage first to discard staged lines. Without index information
+  (no Git) the upstream behaviour remains.
+- The diff gutter shows each change's staging state through the new theme
+  scopes `diff.{plus,minus,delta}.gutter.staged` and `.partly-staged`. They
+  fall back to the plain gutter scopes, so themes that do not set them look as
+  before. The index content is read alongside the diff base when a file is
+  opened or reloaded, and every open buffer of the repository refreshes after
+  one of the commands above. Changes made to the index or HEAD outside Helix
+  are picked up on the next reload, as before.
+- Reads stay in gix; the index writes and the commit run the `git` binary so
+  hooks, signing and identity apply (see `docs/adr/0002-git-binary-for-index-writes.md`).
+
 ## 2026-10-15
 
 - Autocomplete shows visible-row labels 1–9, 0. Ctrl+1–9 immediately accepts

@@ -11,6 +11,8 @@ use std::{
 
 #[cfg(feature = "git")]
 mod git;
+#[cfg(feature = "git")]
+pub use git::cli as git_cli;
 
 mod diff;
 
@@ -41,6 +43,21 @@ impl DiffProviderRegistry {
                     None
                 }
             })
+    }
+
+    /// Get the given file's content in the VCS index, if the file is in it. Together with the
+    /// diff base this gives each change a staging state.
+    pub fn get_index_content(&self, file: &Path, trust_full: bool) -> Option<Vec<u8>> {
+        self.providers.iter().find_map(|provider| {
+            match provider.get_index_content(file, trust_full) {
+                Ok(res) => res,
+                Err(err) => {
+                    log::debug!("{err:#?}");
+                    log::debug!("failed to read index content for {}", file.display());
+                    None
+                }
+            }
+        })
     }
 
     /// Get the current name of the current [HEAD](https://stackoverflow.com/questions/2304087/what-is-head-in-git).
@@ -111,6 +128,14 @@ impl DiffProvider {
         match self {
             #[cfg(feature = "git")]
             Self::Git => git::get_diff_base(file, trust_full),
+            Self::None => bail!("No diff support compiled in"),
+        }
+    }
+
+    fn get_index_content(&self, file: &Path, trust_full: bool) -> Result<Option<Vec<u8>>> {
+        match self {
+            #[cfg(feature = "git")]
+            Self::Git => git::get_index_content(file, trust_full),
             Self::None => bail!("No diff support compiled in"),
         }
     }

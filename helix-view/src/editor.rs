@@ -1360,6 +1360,8 @@ pub struct Editor {
     pub handlers: Handlers,
 
     pub mouse_down_range: Option<Range>,
+    /// A commit message whose commit failed, offered again by the next `:commit` prompt.
+    pub pending_commit_message: Option<String>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
 }
@@ -1484,6 +1486,7 @@ impl Editor {
             needs_redraw: false,
             handlers,
             mouse_down_range: None,
+            pending_commit_message: None,
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             workspace_trust,
@@ -2141,9 +2144,7 @@ impl Editor {
                 .workspace_trust
                 .query(doc.workspace_root(), TrustQuery::Git)
                 .is_trusted();
-            if let Some(diff_base) = self.diff_providers.get_diff_base(&path, trust_full) {
-                doc.set_diff_base(diff_base);
-            }
+            doc.refresh_diff_base(&self.diff_providers, trust_full);
             doc.set_version_control_head(
                 self.diff_providers.get_current_head_name(&path, trust_full),
             );
@@ -2162,6 +2163,27 @@ impl Editor {
         self.switch(id, action);
 
         Ok(id)
+    }
+
+    /// Re-read the diff base, index content and HEAD name of every open document whose file is
+    /// under `repo_root`, after the index or HEAD changed.
+    pub fn refresh_vcs(&mut self, repo_root: &Path) {
+        let providers = self.diff_providers.clone();
+        for doc in self.documents.values_mut() {
+            let Some(path) = doc
+                .path()
+                .filter(|p| p.starts_with(repo_root))
+                .map(Path::to_path_buf)
+            else {
+                continue;
+            };
+            let trust_full = self
+                .workspace_trust
+                .query(doc.workspace_root(), TrustQuery::Git)
+                .is_trusted();
+            doc.refresh_diff_base(&providers, trust_full);
+            doc.set_version_control_head(providers.get_current_head_name(&path, trust_full));
+        }
     }
 
     pub fn close(&mut self, id: ViewId) {
