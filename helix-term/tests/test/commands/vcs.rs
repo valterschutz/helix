@@ -78,6 +78,14 @@ async fn run(file: &Path, row: usize, sequences: Vec<Step<'_>>) -> anyhow::Resul
     test_key_sequences(&mut app, inputs, false).await
 }
 
+/// The staging state of the first change in the current document, once the diff worker has
+/// caught up with the refreshed index.
+fn first_change_staging_state(app: &Application) -> Option<helix_vcs::StagingState> {
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let (_, doc) = helix_view::current_ref!(app.editor);
+    doc.diff_handle()?.load().staging_state(0)
+}
+
 fn doc_text(app: &Application) -> String {
     let (_, doc) = helix_view::current_ref!(app.editor);
     doc.text().to_string()
@@ -92,6 +100,11 @@ async fn stage_diff_change_moves_the_change_under_the_cursor_into_the_index() ->
         1,
         vec![(":stage-diff-change<ret>", &|app| {
             assert_eq!(status_text(app), "Staged 1 change");
+            // The gutter picks the new index up without a reload.
+            assert_eq!(
+                first_change_staging_state(app),
+                Some(helix_vcs::StagingState::Staged)
+            );
         })],
     )
     .await?;
