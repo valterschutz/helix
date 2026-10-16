@@ -2,6 +2,7 @@ pub(crate) mod dap;
 pub(crate) mod lsp;
 pub(crate) mod syntax;
 pub(crate) mod typed;
+mod vcs;
 
 pub use dap::*;
 use futures_util::FutureExt;

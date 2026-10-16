@@ -87,7 +87,10 @@
 | `:pipe`, `:\|` | Pipe each selection to the shell command. |
 | `:pipe-to` | Pipe each selection to the shell command, ignoring output. |
 | `:run-shell-command`, `:sh`, `:!` | Run a shell command |
-| `:reset-diff-change`, `:diffget`, `:diffg` | Reset the diff change at the cursor position. |
+| `:reset-diff-change`, `:diffget`, `:diffg` | Discard the unstaged lines of the changes under the selections. Fully staged changes are skipped. |
+| `:stage-diff-change` | Stage the changes under the selections. A file not yet committed is staged whole. |
+| `:unstage-diff-change` | Unstage the changes under the selections. |
+| `:commit` | Commit the staged changes. Prompts for a one-line message unless one is given. |
 | `:clear-register` | Clear given register. If no argument is provided, clear all registers. |
 | `:set-register` | Set contents of the given register. |
 | `:redraw` | Clear and re-render the whole UI |

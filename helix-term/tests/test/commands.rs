@@ -11,6 +11,7 @@ mod outline;
 mod remove_blank_lines;
 mod reverse_selection_contents;
 mod rotate_selection_contents;
+mod vcs;
 mod write;
 
 #[tokio::test(flavor = "multi_thread")]

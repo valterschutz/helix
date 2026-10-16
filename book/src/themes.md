@@ -281,12 +281,16 @@ See also [#2380]
 - `diff` - version control changes
   - `plus` - additions
     - `gutter` - gutter indicator
+      - `staged` - gutter indicator of a change whose lines are all in the index
+      - `partly-staged` - gutter indicator of a change with some lines in the index
   - `minus` - deletions
     - `gutter` - gutter indicator
+      - `staged`, `partly-staged` - as for `plus`
   - `delta` - modifications
     - `moved` - renamed or moved files/changes
     - `conflict` - merge conflicts
     - `gutter` - gutter indicator
+      - `staged`, `partly-staged` - as for `plus`
 
 - `embedded` - Interpolated expressions embedded in a string template (`${…}`)
 

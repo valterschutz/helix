@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
 use helix_core::syntax::config::LanguageServerFeature;
+use helix_vcs::StagingState;
 
 use crate::{
     editor::GutterType,
@@ -97,9 +98,18 @@ pub fn diff<'doc>(
     theme: &Theme,
     _is_focused: bool,
 ) -> GutterFn<'doc> {
-    let added = theme.get("diff.plus.gutter");
-    let deleted = theme.get("diff.minus.gutter");
-    let modified = theme.get("diff.delta.gutter");
+    // One style per diff sign and staging state. A theme that does not define the staging
+    // variants falls back to the plain gutter scope, so staging is invisible there.
+    let styles = |suffix: &str| {
+        [
+            theme.get(&format!("diff.plus.gutter{suffix}")),
+            theme.get(&format!("diff.minus.gutter{suffix}")),
+            theme.get(&format!("diff.delta.gutter{suffix}")),
+        ]
+    };
+    let unstaged = styles("");
+    let staged = styles(".staged");
+    let partly_staged = styles(".partly-staged");
     if let Some(diff_handle) = doc.diff_handle() {
         let hunks = diff_handle.load();
         let mut hunk_i = 0;
@@ -122,6 +132,11 @@ pub fn diff<'doc>(
                     return None;
                 }
 
+                let [added, deleted, modified] = match hunks.staging_state(hunk_i) {
+                    Some(StagingState::Staged) => staged,
+                    Some(StagingState::PartlyStaged) => partly_staged,
+                    Some(StagingState::Unstaged) | None => unstaged,
+                };
                 let (icon, style) = if hunk.is_pure_insertion() {
                     ("▍", added)
                 } else if hunk.is_pure_removal() {

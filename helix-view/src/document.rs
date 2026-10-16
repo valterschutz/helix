@@ -1310,14 +1310,29 @@ impl Document {
         self.pickup_last_saved_time();
         self.detect_indent_and_line_ending();
 
-        match provider_registry.get_diff_base(&path, trust_full) {
-            Some(diff_base) => self.set_diff_base(diff_base),
-            None => self.diff_handle = None,
-        }
-
+        self.refresh_diff_base(provider_registry, trust_full);
         self.version_control_head = provider_registry.get_current_head_name(&path, trust_full);
 
         Ok(())
+    }
+
+    /// Re-read the diff base and index content of this document's file from the VCS, so the
+    /// gutter reflects the current HEAD and index. Drops the diff when the file has no base.
+    pub fn refresh_diff_base(
+        &mut self,
+        provider_registry: &DiffProviderRegistry,
+        trust_full: bool,
+    ) {
+        let Some(path) = self.path().map(Path::to_path_buf) else {
+            return;
+        };
+        match provider_registry.get_diff_base(&path, trust_full) {
+            Some(diff_base) => {
+                let index = provider_registry.get_index_content(&path, trust_full);
+                self.set_diff_base(diff_base, index);
+            }
+            None => self.diff_handle = None,
+        }
     }
 
     /// Sets the [`Document`]'s encoding with the encoding correspondent to `label`.
@@ -1989,14 +2004,17 @@ impl Document {
         self.diff_handle.as_ref()
     }
 
-    /// Intialize/updates the differ for this document with a new base.
-    pub fn set_diff_base(&mut self, diff_base: Vec<u8>) {
-        if let Ok((diff_base, ..)) = from_reader(&mut diff_base.as_slice(), Some(self.encoding)) {
+    /// Intialize/updates the differ for this document with a new base and the index content
+    /// that goes with it (`None` when the file is not in the index).
+    pub fn set_diff_base(&mut self, diff_base: Vec<u8>, index: Option<Vec<u8>>) {
+        let decode = |bytes: &[u8]| from_reader(&mut &*bytes, Some(self.encoding)).ok();
+        if let Some((diff_base, ..)) = decode(&diff_base) {
+            let index = index.as_deref().and_then(decode).map(|(index, ..)| index);
             if let Some(differ) = &self.diff_handle {
-                differ.update_diff_base(diff_base);
+                differ.update_diff_base(diff_base, index);
                 return;
             }
-            self.diff_handle = Some(DiffHandle::new(diff_base, self.text.clone()))
+            self.diff_handle = Some(DiffHandle::new(diff_base, index, self.text.clone()))
         } else {
             self.diff_handle = None;
         }

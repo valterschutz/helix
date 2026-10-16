@@ -8,8 +8,10 @@ use tokio::sync::Notify;
 use tokio::time::{timeout, timeout_at, Duration};
 
 use crate::diff::{
-    DiffInner, Event, RenderLock, ALGORITHM, DIFF_DEBOUNCE_TIME_ASYNC, DIFF_DEBOUNCE_TIME_SYNC,
+    staging, DiffInner, Event, RenderLock, ALGORITHM, DIFF_DEBOUNCE_TIME_ASYNC,
+    DIFF_DEBOUNCE_TIME_SYNC,
 };
+use imara_diff::Hunk;
 
 use super::line_cache::InternedRopeLines;
 
@@ -21,10 +23,22 @@ pub(super) struct DiffWorker {
     pub diff: Arc<RwLock<DiffInner>>,
     pub diff_finished_notify: Arc<Notify>,
     pub diff_alloc: imara_diff::Diff,
+    /// The index content, when the file is in the index.
+    pub index: Option<Rope>,
+    /// Changes from the diff base to `index`; empty without an index.
+    pub staged: Vec<Hunk>,
+    /// Changes from `index` to the document; empty without an index.
+    pub unstaged: Vec<Hunk>,
+}
+
+/// A new base and its index content, accumulated from base events.
+struct BaseUpdate {
+    diff_base: Rope,
+    index: Option<Rope>,
 }
 
 impl DiffWorker {
-    async fn accumulate_events(&mut self, event: Event) -> (Option<Rope>, Option<Rope>) {
+    async fn accumulate_events(&mut self, event: Event) -> (Option<Rope>, Option<BaseUpdate>) {
         let mut accumulator = EventAccumulator::new();
         accumulator.handle_event(event).await;
         accumulator
@@ -33,18 +47,22 @@ impl DiffWorker {
         (accumulator.doc, accumulator.diff_base)
     }
 
-    pub async fn run(mut self, diff_base: Rope, doc: Rope) {
+    pub async fn run(mut self, diff_base: Rope, index: Option<Rope>, doc: Rope) {
         let mut interner = InternedRopeLines::new(diff_base, doc);
         if let Some(lines) = interner.interned_lines() {
             self.perform_diff(lines);
         }
+        self.index = index;
+        self.perform_staging_diffs(interner.diff_base(), true, interner.doc());
         self.apply_hunks(interner.diff_base(), interner.doc());
         while let Some(event) = self.channel.recv().await {
             let (doc, diff_base) = self.accumulate_events(event).await;
 
             let process_accumulated_events = || {
-                if let Some(new_base) = diff_base {
-                    interner.update_diff_base(new_base, doc)
+                let base_changed = diff_base.is_some();
+                if let Some(BaseUpdate { diff_base, index }) = diff_base {
+                    self.index = index;
+                    interner.update_diff_base(diff_base, doc)
                 } else {
                     interner.update_doc(doc.unwrap())
                 }
@@ -52,6 +70,7 @@ impl DiffWorker {
                 if let Some(lines) = interner.interned_lines() {
                     self.perform_diff(lines)
                 }
+                self.perform_staging_diffs(interner.diff_base(), base_changed, interner.doc());
             };
 
             // Calculating diffs is computationally expensive and should
@@ -75,8 +94,25 @@ impl DiffWorker {
         diff.doc = doc;
         diff.hunks.clear();
         diff.hunks.extend(self.diff_alloc.hunks());
+        diff.index = self.index.clone();
+        diff.staged.clone_from(&self.staged);
+        diff.unstaged.clone_from(&self.unstaged);
         drop(diff);
         self.diff_finished_notify.notify_waiters();
+    }
+
+    /// Diff the base against the index (only when the base changed, since the index comes with
+    /// it) and the index against the document, for staging states.
+    fn perform_staging_diffs(&mut self, diff_base: Rope, base_changed: bool, doc: Rope) {
+        let Some(index) = self.index.clone() else {
+            self.staged.clear();
+            self.unstaged.clear();
+            return;
+        };
+        if base_changed {
+            self.staged = staging::diff_ropes(diff_base, index.clone());
+        }
+        self.unstaged = staging::diff_ropes(index, doc);
     }
 
     fn perform_diff(&mut self, input: &InternedInput<RopeSlice>) {
@@ -97,7 +133,7 @@ impl DiffWorker {
 }
 
 struct EventAccumulator {
-    diff_base: Option<Rope>,
+    diff_base: Option<BaseUpdate>,
     doc: Option<Rope>,
     render_lock: Option<RenderLock>,
 }
@@ -112,13 +148,14 @@ impl EventAccumulator {
     }
 
     async fn handle_event(&mut self, event: Event) {
-        let dst = if event.is_base {
-            &mut self.diff_base
+        if event.is_base {
+            self.diff_base = Some(BaseUpdate {
+                diff_base: event.text,
+                index: event.index,
+            });
         } else {
-            &mut self.doc
-        };
-
-        *dst = Some(event.text);
+            self.doc = Some(event.text);
+        }
 
         // always prefer the most synchronous requested render mode
         if let Some(render_lock) = event.render_lock {
