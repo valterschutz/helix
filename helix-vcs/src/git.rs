@@ -19,6 +19,8 @@ use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
 
 use crate::FileChange;
 
+pub mod cli;
+
 #[cfg(test)]
 mod test;
 
@@ -40,17 +42,45 @@ pub fn get_diff_base(file: &Path, trust_full: bool) -> Result<Vec<u8>> {
         .to_thread_local();
     let head = repo.head_commit()?;
     let file_oid = find_file_in_commit(&repo, &head, &file)?;
+    blob_as_worktree_content(&repo, file_oid, &file)
+}
 
+/// Get the file's content in the index, or `None` if the file is not in the index. Like
+/// [get_diff_base], the content is filtered the way Git would check it out.
+pub fn get_index_content(file: &Path, trust_full: bool) -> Result<Option<Vec<u8>>> {
+    debug_assert!(!file.exists() || file.is_file());
+    debug_assert!(file.is_absolute());
+    let file = gix::path::realpath(file).context("resolve symlinks")?;
+
+    let repo_dir = get_repo_dir(&file)?;
+    let repo = open_repo(repo_dir, trust_full)
+        .context("failed to open git repo")?
+        .to_thread_local();
+    let work_dir = repo.workdir().context("repo has no worktree")?;
+    let rel_path = file.strip_prefix(work_dir)?;
+    let rel_path = gix::path::try_into_bstr(rel_path)?;
+    let index = repo.index_or_empty()?;
+    let Some(entry) = index.entry_by_path(rel_path.as_ref()) else {
+        return Ok(None);
+    };
+    match entry.mode.to_tree_entry_mode().map(|mode| mode.kind()) {
+        Some(EntryKind::Blob | EntryKind::BlobExecutable) => {}
+        _ => return Ok(None),
+    }
+    blob_as_worktree_content(&repo, entry.id, &file).map(Some)
+}
+
+/// Get the actual data that git would make out of the git object.
+/// This will apply the user's git config or attributes like crlf conversions.
+///
+/// The whole filter pipeline still runs in untrusted (`Trust::Reduced`) mode so built-in
+/// conversions like autocrlf keep working, but gix drops `filter.*.clean` / `filter.*.smudge`
+/// drivers defined in untrusted (repository-local) config, so those external programs are not
+/// executed unless the workspace was explicitly trusted. This relies on `open_repo` forcing the
+/// trust level instead of letting gix re-derive it from `.git` ownership; see the note there.
+fn blob_as_worktree_content(repo: &Repository, file_oid: ObjectId, file: &Path) -> Result<Vec<u8>> {
     let file_object = repo.find_object(file_oid)?;
     let data = file_object.detach().data;
-    // Get the actual data that git would make out of the git object.
-    // This will apply the user's git config or attributes like crlf conversions.
-    //
-    // The whole filter pipeline still runs in untrusted (`Trust::Reduced`) mode so built-in
-    // conversions like autocrlf keep working, but gix drops `filter.*.clean` / `filter.*.smudge`
-    // drivers defined in untrusted (repository-local) config, so those external programs are not
-    // executed unless the workspace was explicitly trusted. This relies on `open_repo` forcing the
-    // trust level instead of letting gix re-derive it from `.git` ownership; see the note there.
     if let Some(work_dir) = repo.workdir() {
         let rela_path = file.strip_prefix(work_dir)?;
         let rela_path = gix::path::try_into_bstr(rela_path)?;

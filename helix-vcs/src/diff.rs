@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use crate::diff::worker::DiffWorker;
 
 pub use imara_diff::Hunk;
-pub use staging::StagingState;
+pub use staging::{unified_patch, StagingState};
 
 mod line_cache;
 mod staging;

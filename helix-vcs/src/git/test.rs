@@ -156,3 +156,165 @@ fn symlink_to_git_repo() {
     assert_eq!(git::get_diff_base(&file_link, true).unwrap(), contents);
     assert_eq!(git::get_diff_base(&file, true).unwrap(), contents);
 }
+
+mod staging {
+    //! Reading the index and moving changes through it with the `git` binary.
+
+    use std::{fs::File, io::Write};
+
+    use helix_core::Rope;
+    use imara_diff::Hunk;
+
+    use super::{create_commit, empty_git_repo, exec_git_cmd};
+    use crate::git::{self, cli};
+    use crate::unified_patch;
+
+    fn write(path: &std::path::Path, contents: &str) {
+        File::create(path)
+            .unwrap()
+            .write_all(contents.as_bytes())
+            .unwrap();
+    }
+
+    /// A repository where `file.txt` is committed as `a\nb\nc\n`, with the working tree holding
+    /// `worktree`, and `commit.gpgsign` off so commits never wait for a signer.
+    fn repo_with_file(worktree: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let repo = empty_git_repo();
+        exec_git_cmd("config commit.gpgsign false", repo.path());
+        let file = repo.path().join("file.txt");
+        write(&file, "a\nb\nc\n");
+        create_commit(repo.path(), true);
+        write(&file, worktree);
+        (repo, file)
+    }
+
+    #[test]
+    fn index_content_is_what_was_added_not_the_working_tree() {
+        let (repo, file) = repo_with_file("a\nB\nc\n");
+        exec_git_cmd("add file.txt", repo.path());
+        write(&file, "a\nX\nc\n");
+        assert_eq!(
+            git::get_index_content(&file, true).unwrap(),
+            Some(b"a\nB\nc\n".to_vec())
+        );
+    }
+
+    #[test]
+    fn untracked_file_has_no_index_content() {
+        let (repo, _) = repo_with_file("a\nb\nc\n");
+        let other = repo.path().join("new.txt");
+        write(&other, "new\n");
+        assert_eq!(git::get_index_content(&other, true).unwrap(), None);
+    }
+
+    #[test]
+    fn repo_root_is_the_working_tree_top_level() {
+        let (repo, file) = repo_with_file("a\nb\nc\n");
+        assert_eq!(
+            cli::repo_root(&file).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+    }
+
+    #[test]
+    fn staging_a_patch_moves_only_its_change_into_the_index() {
+        let (repo, file) = repo_with_file("a\nB\nc\nd\n");
+        let root = cli::repo_root(&file).unwrap();
+        // The index (still `a\nb\nc\n`) to the working tree has two changes; stage `b -> B`.
+        let patch = unified_patch(
+            "file.txt",
+            &Rope::from_str("a\nb\nc\n"),
+            &Rope::from_str("a\nB\nc\nd\n"),
+            &[Hunk {
+                before: 1..2,
+                after: 1..2,
+            }],
+        );
+        cli::stage_patch(&root, &patch).unwrap();
+        assert_eq!(
+            git::get_index_content(&file, true).unwrap(),
+            Some(b"a\nB\nc\n".to_vec())
+        );
+        drop(repo);
+    }
+
+    #[test]
+    fn unstaging_a_patch_removes_only_its_change_from_the_index() {
+        let (repo, file) = repo_with_file("a\nB\nc\nd\n");
+        exec_git_cmd("add file.txt", repo.path());
+        let root = cli::repo_root(&file).unwrap();
+        // HEAD to the index has two changes; unstage the appended `d`.
+        let patch = unified_patch(
+            "file.txt",
+            &Rope::from_str("a\nb\nc\n"),
+            &Rope::from_str("a\nB\nc\nd\n"),
+            &[Hunk {
+                before: 3..3,
+                after: 3..4,
+            }],
+        );
+        cli::unstage_patch(&root, &patch).unwrap();
+        assert_eq!(
+            git::get_index_content(&file, true).unwrap(),
+            Some(b"a\nB\nc\n".to_vec())
+        );
+    }
+
+    #[test]
+    fn a_patch_for_a_file_without_final_newline_applies() {
+        let (repo, file) = repo_with_file("a\nb\nc");
+        let root = cli::repo_root(&file).unwrap();
+        let patch = unified_patch(
+            "file.txt",
+            &Rope::from_str("a\nb\nc\n"),
+            &Rope::from_str("a\nb\nc"),
+            &[Hunk {
+                before: 2..4,
+                after: 2..3,
+            }],
+        );
+        cli::stage_patch(&root, &patch).unwrap();
+        assert_eq!(
+            git::get_index_content(&file, true).unwrap(),
+            Some(b"a\nb\nc".to_vec())
+        );
+        drop(repo);
+    }
+
+    #[test]
+    fn commit_records_the_index_and_reports_the_new_head() {
+        let (repo, file) = repo_with_file("a\nB\nc\n");
+        let root = cli::repo_root(&file).unwrap();
+        assert!(!cli::has_staged_changes(&root).unwrap());
+        cli::add_path(&root, &file).unwrap();
+        assert!(cli::has_staged_changes(&root).unwrap());
+
+        let head = cli::commit(&root, "Capitalize b").unwrap();
+        assert!(head.ends_with(" Capitalize b"), "{head}");
+        assert!(!cli::has_staged_changes(&root).unwrap());
+        assert_eq!(
+            git::get_diff_base(&file, true).unwrap(),
+            b"a\nB\nc\n".to_vec()
+        );
+        drop(repo);
+    }
+
+    #[test]
+    fn commit_failure_is_reported_as_an_error() {
+        let (_repo, file) = repo_with_file("a\nb\nc\n");
+        let root = cli::repo_root(&file).unwrap();
+        assert!(cli::commit(&root, "nothing staged").is_err());
+    }
+
+    #[test]
+    fn reset_path_takes_a_new_file_out_of_the_index() {
+        let (repo, _) = repo_with_file("a\nb\nc\n");
+        let other = repo.path().join("new.txt");
+        write(&other, "new\n");
+        let root = cli::repo_root(&other).unwrap();
+        cli::add_path(&root, &other).unwrap();
+        assert!(cli::has_staged_changes(&root).unwrap());
+        cli::reset_path(&root, &other).unwrap();
+        assert!(!cli::has_staged_changes(&root).unwrap());
+    }
+}

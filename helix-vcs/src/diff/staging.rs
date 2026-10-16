@@ -67,3 +67,55 @@ pub(super) fn diff_ropes(before: Rope, after: Rope) -> Vec<Hunk> {
     );
     diff.hunks().collect()
 }
+
+/// Render `hunks` from `old` to `new` as a zero-context unified diff of `path`, the form that
+/// `git apply --unidiff-zero` accepts.
+pub fn unified_patch(path: &str, old: &Rope, new: &Rope, hunks: &[Hunk]) -> String {
+    let mut patch = format!("--- a/{path}\n+++ b/{path}\n");
+    for hunk in hunks {
+        let old_lines = patch_lines(old, &hunk.before);
+        let new_lines = patch_lines(new, &hunk.after);
+        if old_lines.is_empty() && new_lines.is_empty() {
+            continue;
+        }
+        patch.push_str(&format!(
+            "@@ -{} +{} @@\n",
+            span(&hunk.before, old_lines.len()),
+            span(&hunk.after, new_lines.len())
+        ));
+        for line in old_lines {
+            push_line(&mut patch, '-', &line);
+        }
+        for line in new_lines {
+            push_line(&mut patch, '+', &line);
+        }
+    }
+    patch
+}
+
+/// One side of a `@@` header: 1-based first line and count, or the preceding line and 0.
+fn span(range: &Range<u32>, count: usize) -> String {
+    if count == 0 {
+        format!("{},0", range.start)
+    } else {
+        format!("{},{}", range.start + 1, count)
+    }
+}
+
+/// The lines of `text` in `range`, dropping the empty final "line" after a trailing newline,
+/// which is a rope artefact rather than content.
+fn patch_lines(text: &Rope, range: &Range<u32>) -> Vec<String> {
+    let last = text.len_lines() - 1;
+    (range.start as usize..(range.end as usize).min(text.len_lines()))
+        .filter(|&i| !(i == last && text.line(i).len_chars() == 0))
+        .map(|i| text.line(i).to_string())
+        .collect()
+}
+
+fn push_line(patch: &mut String, sign: char, line: &str) {
+    patch.push(sign);
+    patch.push_str(line);
+    if !line.ends_with('\n') {
+        patch.push_str("\n\\ No newline at end of file\n");
+    }
+}

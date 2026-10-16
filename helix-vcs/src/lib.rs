@@ -14,7 +14,7 @@ mod git;
 
 mod diff;
 
-pub use diff::{DiffHandle, Hunk};
+pub use diff::{unified_patch, DiffHandle, Hunk, StagingState};
 
 mod status;
 
