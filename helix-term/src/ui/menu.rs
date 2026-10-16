@@ -6,7 +6,12 @@ use tui::{buffer::Buffer as Surface, widgets::Table};
 
 pub use tui::widgets::{Cell, Row};
 
-use helix_view::{editor::SmartTabConfig, graphics::Rect, Editor};
+use helix_view::{
+    editor::SmartTabConfig,
+    graphics::Rect,
+    input::{KeyCode, KeyEvent, KeyModifiers},
+    Editor,
+};
 use tui::layout::Constraint;
 
 pub trait Item: Sync + Send + 'static {
@@ -36,6 +41,7 @@ pub struct Menu<T: Item> {
     viewport: (u16, u16),
     recalculate: bool,
     auto_close: bool,
+    numbered_shortcuts: bool,
 }
 
 impl<T: Item> Menu<T> {
@@ -61,6 +67,7 @@ impl<T: Item> Menu<T> {
             viewport: (0, 0),
             recalculate: true,
             auto_close: false,
+            numbered_shortcuts: false,
         }
     }
 
@@ -134,13 +141,29 @@ impl<T: Item> Menu<T> {
         self
     }
 
+    /// Label visible rows 1–9, 0 and accept them with Ctrl+digit.
+    /// Opt-in so menus other than autocomplete retain their existing behavior.
+    pub fn numbered_shortcuts(mut self) -> Self {
+        self.numbered_shortcuts = true;
+        self
+    }
+
+    fn select_visible(&mut self, row: usize) -> bool {
+        let index = self.scroll + row;
+        if row >= self.size.1 as usize || index >= self.matches.len() {
+            return false;
+        }
+        self.cursor = Some(index);
+        true
+    }
+
     fn recalculate_size(&mut self, viewport: (u16, u16)) {
         let n = self
             .options
             .first()
             .map(|option| option.format(&self.editor_data).cells.len())
             .unwrap_or_default();
-        let max_lens = self.options.iter().fold(vec![0; n], |mut acc, option| {
+        let mut max_lens = self.options.iter().fold(vec![0; n], |mut acc, option| {
             let row = option.format(&self.editor_data);
             // maintain max for each column
             for (acc, cell) in acc.iter_mut().zip(row.cells.iter()) {
@@ -157,7 +180,10 @@ impl<T: Item> Menu<T> {
         // do all the matches fit on a single screen?
         let fits = self.matches.len() <= height;
 
-        let mut len = max_lens.iter().sum::<usize>() + n;
+        if self.numbered_shortcuts {
+            max_lens.insert(0, 1);
+        }
+        let mut len = max_lens.iter().sum::<usize>() + max_lens.len();
 
         if !fits {
             len += 1; // +1: reserve some space for scrollbar
@@ -262,6 +288,18 @@ impl<T: Item + 'static> Component for Menu<T> {
         }
 
         match event {
+            KeyEvent {
+                code: KeyCode::Char(digit @ '0'..='9'),
+                modifiers: KeyModifiers::CONTROL,
+            } if self.numbered_shortcuts => {
+                let row = (digit as usize - '0' as usize + 9) % 10;
+                if self.select_visible(row) {
+                    (self.callback_fn)(cx.editor, self.selection(), MenuEvent::Validate);
+                    return EventResult::Consumed(close_fn);
+                }
+                // Do not leak unavailable shortcuts into insert-mode commands.
+                return EventResult::Consumed(None);
+            }
             // esc or ctrl-c aborts the completion and closes the menu
             key!(Esc) | ctrl!('c') => {
                 (self.callback_fn)(cx.editor, self.selection(), MenuEvent::Abort);
@@ -356,9 +394,18 @@ impl<T: Item + 'static> Component for Menu<T> {
 
         let win_height = area.height as usize;
 
-        let rows = options
-            .iter()
-            .map(|option| option.format(&self.editor_data));
+        let rows = options.iter().enumerate().map(|(index, option)| {
+            let mut row = option.format(&self.editor_data);
+            if self.numbered_shortcuts {
+                let label = index
+                    .checked_sub(scroll)
+                    .filter(|&row| row < win_height.min(10))
+                    .map(|row| ((row + 1) % 10).to_string())
+                    .unwrap_or_default();
+                row.cells.insert(0, Cell::from(label));
+            }
+            row
+        });
         let table = Table::new(rows)
             .style(style)
             .highlight_style(selected)

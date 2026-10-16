@@ -5,6 +5,16 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
 ## 2026-10-15
 
+- Autocomplete shows visible-row labels 1–9, 0. Ctrl+1–9 immediately accepts
+  the corresponding visible suggestion; Ctrl+0 accepts the tenth. Scrolling
+  renumbers the visible rows, and shortcuts for absent rows do nothing. Other
+  menus and keys pressed without autocomplete stay unchanged. This enables
+  direct access without repeated navigation; upstream cannot remap completion
+  menu actions, so the shared menu has a completion-only opt-in rather than a
+  global shortcut change. Labels cost two columns and use the existing menu
+  theme. Distinct Ctrl+digits require enhanced terminal key reporting (such as
+  Ghostty's Kitty keyboard protocol); legacy terminal aliases are not remapped.
+
 - Keep the line after a multi-line Python subscript or `type` alias at the
   statement's indentation. Python's indent query did not open a scope for
   `subscript` or `type_parameter` brackets, so the hybrid heuristic copied the

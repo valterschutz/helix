@@ -345,7 +345,13 @@ Displays documentation for the selected completion item. Remapping currently not
 | `Shift-Tab`, `Ctrl-p`, `Up` | Previous entry                   |
 | `Tab`, `Ctrl-n`, `Down`     | Next entry                       |
 | `Enter`                     | Close menu and accept completion |
+| `Ctrl-1`–`Ctrl-9`, `Ctrl-0`  | Accept visible entry 1–9 or 10   |
 | `Ctrl-c`                    | Close menu and reject completion |
+
+This fork labels visible suggestions 1–9, 0. Numbers restart at the top after
+scrolling. A shortcut for an entry that is not visible does nothing. Ctrl+digits
+requires enhanced terminal key reporting (for example, Kitty keyboard protocol
+in Ghostty); legacy aliases are not remapped. Other menus are unchanged.
 
 Any other keypresses result in the completion being accepted.
 
