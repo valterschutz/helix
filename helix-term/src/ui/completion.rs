@@ -290,7 +290,7 @@ impl Completion {
             }
         });
 
-        let popup = Popup::new(Self::ID, menu)
+        let popup = Popup::new(Self::ID, menu.numbered_shortcuts())
             .with_scrollbar(false)
             .ignore_escape_key(true);
 
