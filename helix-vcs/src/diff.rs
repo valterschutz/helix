@@ -12,8 +12,10 @@ use tokio::time::Instant;
 use crate::diff::worker::DiffWorker;
 
 pub use imara_diff::Hunk;
+pub use staging::StagingState;
 
 mod line_cache;
+mod staging;
 mod worker;
 
 /// A rendering lock passed to the differ the prevents redraws from occurring
@@ -25,6 +27,8 @@ struct RenderLock {
 struct Event {
     text: Rope,
     is_base: bool,
+    /// The index content accompanying a new base, if the file is in the index.
+    index: Option<Rope>,
     render_lock: Option<RenderLock>,
 }
 
@@ -33,6 +37,12 @@ struct DiffInner {
     diff_base: Rope,
     doc: Rope,
     hunks: Vec<Hunk>,
+    /// The index content, when known. Without it no change has a staging state.
+    index: Option<Rope>,
+    /// Changes from `diff_base` to `index`.
+    staged: Vec<Hunk>,
+    /// Changes from `index` to `doc`.
+    unstaged: Vec<Hunk>,
 }
 
 /// Representation of a diff that can be updated.
@@ -44,11 +54,17 @@ pub struct DiffHandle {
 }
 
 impl DiffHandle {
-    pub fn new(diff_base: Rope, doc: Rope) -> DiffHandle {
-        DiffHandle::new_with_handle(diff_base, doc).0
+    /// Start diffing `doc` against `diff_base`. `index` is the file's content in the VCS index,
+    /// if any; it gives every change a [StagingState].
+    pub fn new(diff_base: Rope, index: Option<Rope>, doc: Rope) -> DiffHandle {
+        DiffHandle::new_with_handle(diff_base, index, doc).0
     }
 
-    fn new_with_handle(diff_base: Rope, doc: Rope) -> (DiffHandle, JoinHandle<()>) {
+    fn new_with_handle(
+        diff_base: Rope,
+        index: Option<Rope>,
+        doc: Rope,
+    ) -> (DiffHandle, JoinHandle<()>) {
         let (sender, receiver) = unbounded_channel();
         let diff: Arc<RwLock<DiffInner>> = Arc::default();
         let worker = DiffWorker {
@@ -56,8 +72,11 @@ impl DiffHandle {
             diff: diff.clone(),
             diff_finished_notify: Arc::default(),
             diff_alloc: imara_diff::Diff::default(),
+            index: None,
+            staged: Vec::new(),
+            unstaged: Vec::new(),
         };
-        let handle = tokio::spawn(worker.run(diff_base, doc));
+        let handle = tokio::spawn(worker.run(diff_base, index, doc));
         let differ = DiffHandle {
             channel: sender,
             diff,
@@ -89,23 +108,26 @@ impl DiffHandle {
         } else {
             Some(Instant::now() + tokio::time::Duration::from_millis(SYNC_DIFF_TIMEOUT))
         };
-        self.update_document_impl(doc, self.inverted, Some(RenderLock { lock, timeout }))
+        self.update_document_impl(doc, self.inverted, None, Some(RenderLock { lock, timeout }))
     }
 
-    /// Updates the base text of the diff. Returns if the update was successful.
-    pub fn update_diff_base(&self, diff_base: Rope) -> bool {
-        self.update_document_impl(diff_base, !self.inverted, None)
+    /// Updates the base text of the diff and the index content that goes with it. Returns if
+    /// the update was successful.
+    pub fn update_diff_base(&self, diff_base: Rope, index: Option<Rope>) -> bool {
+        self.update_document_impl(diff_base, !self.inverted, index, None)
     }
 
     fn update_document_impl(
         &self,
         text: Rope,
         is_base: bool,
+        index: Option<Rope>,
         render_lock: Option<RenderLock>,
     ) -> bool {
         let event = Event {
             text,
             is_base,
+            index,
             render_lock,
         };
         self.channel.send(event).is_ok()
@@ -152,6 +174,25 @@ impl Diff<'_> {
 
     pub fn is_inverted(&self) -> bool {
         self.inverted
+    }
+
+    /// Returns the file's content in the VCS index, if known.
+    pub fn index(&self) -> Option<&Rope> {
+        self.diff.index.as_ref()
+    }
+
+    /// Where the `n`th change sits relative to the index. `None` when the index content is
+    /// unknown, the diff is inverted, or there is no `n`th change.
+    pub fn staging_state(&self, n: u32) -> Option<StagingState> {
+        if self.inverted || self.diff.index.is_none() {
+            return None;
+        }
+        let hunk = self.diff.hunks.get(n as usize)?;
+        Some(staging::classify(
+            hunk,
+            &self.diff.staged,
+            &self.diff.unstaged,
+        ))
     }
 
     /// Returns the `Hunk` for the `n`th change in this file.
