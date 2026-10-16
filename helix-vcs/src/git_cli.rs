@@ -1,8 +1,10 @@
 //! Writes to the Git index and history, done through the `git` binary.
 //!
-//! Reads stay in gix, but applying patches to the index and committing run `git` itself so
-//! hooks, commit signing, identity and the rest of the user's configuration apply exactly as
-//! they would on the command line. See `docs/adr/0002-git-binary-for-index-writes.md`.
+//! Diff reads stay in gix, but applying patches to the index and committing run `git` itself
+//! so hooks, commit signing, identity and the rest of the user's configuration apply exactly
+//! as they would on the command line. The few reads here (`repo_root`, `has_staged_changes`,
+//! the new HEAD after a commit) are the ones that belong to that write workflow. See
+//! `docs/adr/0002-git-binary-for-index-writes.md`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

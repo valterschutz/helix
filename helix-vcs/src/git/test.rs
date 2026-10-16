@@ -166,7 +166,8 @@ mod staging {
     use imara_diff::Hunk;
 
     use super::{create_commit, empty_git_repo, exec_git_cmd};
-    use crate::git::{self, cli};
+    use crate::git;
+    use crate::git_cli as cli;
     use crate::unified_patch;
 
     fn write(path: &std::path::Path, contents: &str) {

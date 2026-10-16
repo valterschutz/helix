@@ -11,8 +11,9 @@ use std::{
 
 #[cfg(feature = "git")]
 mod git;
-#[cfg(feature = "git")]
-pub use git::cli as git_cli;
+/// Writes to the Git index and history through the `git` binary. Not gated on the `git`
+/// feature: it needs no gix, and a build without the feature gets Git's own error at run time.
+pub mod git_cli;
 
 mod diff;
 

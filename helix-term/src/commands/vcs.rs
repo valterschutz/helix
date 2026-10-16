@@ -18,8 +18,47 @@ use crate::compositor;
 use crate::job::Callback;
 use crate::ui::{self, PromptEvent};
 
-/// The repository root and the current document's path relative to it.
-fn repo_and_relative_path(editor: &Editor) -> anyhow::Result<(PathBuf, PathBuf, String)> {
+/// Which way a change moves through the index.
+#[derive(Clone, Copy)]
+enum Direction {
+    Stage,
+    Unstage,
+}
+
+impl Direction {
+    fn past_tense(self) -> &'static str {
+        match self {
+            Direction::Stage => "Staged",
+            Direction::Unstage => "Unstaged",
+        }
+    }
+
+    fn gerund(self) -> &'static str {
+        match self {
+            Direction::Stage => "staging",
+            Direction::Unstage => "unstaging",
+        }
+    }
+
+    fn adjective(self) -> &'static str {
+        match self {
+            Direction::Stage => "staged",
+            Direction::Unstage => "unstaged",
+        }
+    }
+}
+
+/// The current document's file, placed in its repository.
+struct RepoFile {
+    /// The repository's top-level working tree directory.
+    root: PathBuf,
+    /// The file's path as the document has it.
+    path: PathBuf,
+    /// The file's path relative to `root`, as Git names it in patches.
+    relative: String,
+}
+
+fn repo_file(editor: &Editor) -> anyhow::Result<RepoFile> {
     let (_, doc) = current_ref!(editor);
     let path = doc.path().context("Buffer has no file")?.to_path_buf();
     let root = git_cli::repo_root(&path).map_err(|_| anyhow!("Not in a Git repository"))?;
@@ -28,11 +67,15 @@ fn repo_and_relative_path(editor: &Editor) -> anyhow::Result<(PathBuf, PathBuf, 
         .strip_prefix(&root)
         .map(|p| p.to_string_lossy().into_owned())
         .with_context(|| format!("{} is outside {}", path.display(), root.display()))?;
-    Ok((root, path, relative))
+    Ok(RepoFile {
+        root,
+        path,
+        relative,
+    })
 }
 
 /// The changes of the current document that intersect any selection.
-fn selected_hunks(editor: &Editor) -> Vec<Hunk> {
+fn selected_changes(editor: &Editor) -> Vec<Hunk> {
     let (view, doc) = current_ref!(editor);
     let Some(handle) = doc.diff_handle() else {
         return Vec::new();
@@ -44,91 +87,92 @@ fn selected_hunks(editor: &Editor) -> Vec<Hunk> {
         .collect()
 }
 
-/// Deduplicate and order hunks so a patch or transaction can be built from them.
-fn sorted_unique(mut hunks: Vec<Hunk>) -> Vec<Hunk> {
-    hunks.sort_by_key(|h| (h.before.start, h.after.start));
-    hunks.dedup();
-    hunks
+/// Deduplicate and order changes so a patch or transaction can be built from them.
+fn sorted_unique(mut changes: Vec<Hunk>) -> Vec<Hunk> {
+    changes.sort_by_key(|h| (h.before.start, h.after.start));
+    changes.dedup();
+    changes
 }
 
 fn plural(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
+/// Stage or unstage a file whole: what Git can express for a file HEAD or the index does not
+/// have, where there are no individual changes to pick from.
+fn move_whole_file(
+    cx: &mut compositor::Context,
+    file: &RepoFile,
+    direction: Direction,
+) -> anyhow::Result<()> {
+    match direction {
+        Direction::Stage => git_cli::add_path(&file.root, &file.path)?,
+        Direction::Unstage => git_cli::reset_path(&file.root, &file.path)?,
+    }
+    cx.editor
+        .set_status(format!("{} {}", direction.past_tense(), file.relative));
+    cx.editor.refresh_vcs(&file.root);
+    Ok(())
+}
+
 /// Stage or unstage the changes under the selections, then refresh every buffer of the repo.
-fn move_selected_changes(cx: &mut compositor::Context, stage: bool) -> anyhow::Result<()> {
-    let verb = if stage { "Staged" } else { "Unstaged" };
-    let (root, path, relative) = repo_and_relative_path(cx.editor)?;
+fn move_selected_changes(cx: &mut compositor::Context, direction: Direction) -> anyhow::Result<()> {
+    let file = repo_file(cx.editor)?;
     let (_, doc) = current_ref!(cx.editor);
     if doc.is_modified() {
         bail!(
             "Buffer has unsaved changes; save it before {}",
-            if stage { "staging" } else { "unstaging" }
+            direction.gerund()
         );
     }
 
     let Some(handle) = doc.diff_handle() else {
-        // Not in HEAD, so there are no changes to pick from: the whole file is the change.
-        if stage {
-            git_cli::add_path(&root, &path)?;
-        } else {
-            git_cli::reset_path(&root, &path)?;
-        }
-        cx.editor.set_status(format!("{verb} {relative}"));
-        cx.editor.refresh_vcs(&root);
-        return Ok(());
+        return move_whole_file(cx, &file, direction);
     };
-
     let diff = handle.load();
-    let selected = selected_hunks(cx.editor);
+    let selected = selected_changes(cx.editor);
     if selected.is_empty() {
         bail!("There are no changes under any selection");
     }
     let Some(index) = diff.index() else {
-        // In HEAD but not in the index: Git tracks that as a whole-file state.
         drop(diff);
-        if stage {
-            git_cli::add_path(&root, &path)?;
-        } else {
-            git_cli::reset_path(&root, &path)?;
-        }
-        cx.editor.set_status(format!("{verb} {relative}"));
-        cx.editor.refresh_vcs(&root);
-        return Ok(());
+        return move_whole_file(cx, &file, direction);
     };
 
     let mut moved = 0;
-    let mut hunks = Vec::new();
-    for hunk in &selected {
-        let touching = if stage {
-            diff.unstaged_hunks_touching(hunk)
-        } else {
-            diff.staged_hunks_touching(hunk)
+    let mut changes = Vec::new();
+    for change in &selected {
+        let touching = match direction {
+            Direction::Stage => diff.unstaged_changes_touching(change),
+            Direction::Unstage => diff.staged_changes_touching(change),
         };
         if !touching.is_empty() {
             moved += 1;
-            hunks.extend(touching);
+            changes.extend(touching);
         }
     }
-    if hunks.is_empty() {
-        bail!(
-            "The selected changes are already {}",
-            if stage { "staged" } else { "unstaged" }
-        );
+    if changes.is_empty() {
+        bail!("The selected changes are already {}", direction.adjective());
     }
-    let hunks = sorted_unique(hunks);
-    if stage {
-        let patch = unified_patch(&relative, index, diff.doc(), &hunks);
-        drop(diff);
-        git_cli::stage_patch(&root, &patch)?;
-    } else {
-        let patch = unified_patch(&relative, diff.diff_base(), index, &hunks);
-        drop(diff);
-        git_cli::unstage_patch(&root, &patch)?;
+    let changes = sorted_unique(changes);
+    match direction {
+        Direction::Stage => {
+            let patch = unified_patch(&file.relative, index, diff.doc(), &changes);
+            drop(diff);
+            git_cli::stage_patch(&file.root, &patch)?;
+        }
+        Direction::Unstage => {
+            let patch = unified_patch(&file.relative, diff.diff_base(), index, &changes);
+            drop(diff);
+            git_cli::unstage_patch(&file.root, &patch)?;
+        }
     }
-    cx.editor
-        .set_status(format!("{verb} {}", plural(moved, "change")));
-    cx.editor.refresh_vcs(&root);
+    cx.editor.set_status(format!(
+        "{} {}",
+        direction.past_tense(),
+        plural(moved, "change")
+    ));
+    cx.editor.refresh_vcs(&file.root);
     Ok(())
 }
 
@@ -140,7 +184,7 @@ pub(super) fn stage_diff_change(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-    move_selected_changes(cx, true)
+    move_selected_changes(cx, Direction::Stage)
 }
 
 pub(super) fn unstage_diff_change(
@@ -151,7 +195,7 @@ pub(super) fn unstage_diff_change(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-    move_selected_changes(cx, false)
+    move_selected_changes(cx, Direction::Unstage)
 }
 
 /// Revert the unstaged lines of the changes under the selections in the buffer. A fully staged
@@ -167,7 +211,7 @@ pub(super) fn reset_diff_change(
     }
 
     let scrolloff = cx.editor.config().scrolloff;
-    let selected = selected_hunks(cx.editor);
+    let selected = selected_changes(cx.editor);
     let (view, doc) = current!(cx.editor);
     let Some(handle) = doc.diff_handle() else {
         bail!("Diff is not available in the current buffer")
@@ -178,25 +222,25 @@ pub(super) fn reset_diff_change(
 
     let diff = handle.load();
     let doc_text = doc.text().slice(..);
-    // Each reverted hunk is replaced by the lines of `source` it came from.
-    let (source, hunks, skipped): (&Rope, Vec<Hunk>, usize) = match diff.index() {
+    // Each reverted change is replaced by the lines of `source` it came from.
+    let (source, changes, skipped): (&Rope, Vec<Hunk>, usize) = match diff.index() {
         Some(index) => {
-            let mut hunks = Vec::new();
+            let mut changes = Vec::new();
             let mut skipped = 0;
-            for hunk in &selected {
-                let unstaged = diff.unstaged_hunks_touching(hunk);
+            for change in &selected {
+                let unstaged = diff.unstaged_changes_touching(change);
                 if unstaged.is_empty() {
                     skipped += 1;
                 } else {
-                    hunks.extend(unstaged);
+                    changes.extend(unstaged);
                 }
             }
-            (index, sorted_unique(hunks), skipped)
+            (index, sorted_unique(changes), skipped)
         }
         None => (diff.diff_base(), selected.clone(), 0),
     };
     let discarded = selected.len() - skipped;
-    if hunks.is_empty() {
+    if changes.is_empty() {
         bail!(
             "{} fully staged; unstage first to discard",
             if skipped == 1 {
@@ -209,13 +253,13 @@ pub(super) fn reset_diff_change(
 
     let transaction = Transaction::change(
         doc.text(),
-        hunks.iter().map(|hunk| {
-            let start = source.line_to_char(hunk.before.start as usize);
-            let end = source.line_to_char(hunk.before.end as usize);
+        changes.iter().map(|change| {
+            let start = source.line_to_char(change.before.start as usize);
+            let end = source.line_to_char(change.before.end as usize);
             let text: Tendril = source.slice(start..end).chunks().collect();
             (
-                doc_text.line_to_char(hunk.after.start as usize),
-                doc_text.line_to_char(hunk.after.end as usize),
+                doc_text.line_to_char(change.after.start as usize),
+                doc_text.line_to_char(change.after.end as usize),
                 (!text.is_empty()).then_some(text),
             )
         }),
@@ -228,9 +272,8 @@ pub(super) fn reset_diff_change(
     let mut status = format!("Discarded {}", plural(discarded, "change"));
     if skipped > 0 {
         status.push_str(&format!(
-            ", skipped {} fully staged {}",
-            skipped,
-            if skipped == 1 { "change" } else { "changes" }
+            ", skipped {}",
+            plural(skipped, "fully staged change")
         ));
     }
     cx.editor.set_status(status);
@@ -247,7 +290,7 @@ pub(super) fn commit(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-    let (root, _, _) = repo_and_relative_path(cx.editor)?;
+    let root = repo_file(cx.editor)?.root;
     if !git_cli::has_staged_changes(&root)? {
         bail!("Nothing staged");
     }

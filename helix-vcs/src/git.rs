@@ -19,8 +19,6 @@ use gix::{Commit, ObjectId, Repository, ThreadSafeRepository};
 
 use crate::FileChange;
 
-pub mod cli;
-
 #[cfg(test)]
 mod test;
 
