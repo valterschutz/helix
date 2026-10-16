@@ -60,9 +60,13 @@ struct RepoFile {
 
 fn repo_file(editor: &Editor) -> anyhow::Result<RepoFile> {
     let (_, doc) = current_ref!(editor);
-    let path = doc.path().context("Buffer has no file")?.to_path_buf();
+    let path = doc
+        .path()
+        .ok_or_else(|| anyhow!("Not in a Git repository"))?
+        .to_path_buf();
     let root = git_cli::repo_root(&path).map_err(|_| anyhow!("Not in a Git repository"))?;
-    let canonical = helix_stdx::path::canonicalize(&path);
+    // Git reports the root with symlinks resolved, so resolve them on the file too.
+    let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
     let relative = canonical
         .strip_prefix(&root)
         .map(|p| p.to_string_lossy().into_owned())
@@ -126,35 +130,39 @@ fn move_selected_changes(cx: &mut compositor::Context, direction: Direction) -> 
         );
     }
 
-    let Some(handle) = doc.diff_handle() else {
+    if doc.diff_handle().is_none() {
         return move_whole_file(cx, &file, direction);
-    };
-    let diff = handle.load();
+    }
+    // Select before loading the diff: both take the diff's read lock, and a nested read would
+    // block behind the worker's pending write.
     let selected = selected_changes(cx.editor);
     if selected.is_empty() {
         bail!("There are no changes under any selection");
     }
+    let (_, doc) = current_ref!(cx.editor);
+    let diff = doc.diff_handle().expect("checked above").load();
     let Some(index) = diff.index() else {
         drop(diff);
         return move_whole_file(cx, &file, direction);
     };
 
-    let mut moved = 0;
-    let mut changes = Vec::new();
-    for change in &selected {
-        let touching = match direction {
-            Direction::Stage => diff.unstaged_changes_touching(change),
-            Direction::Unstage => diff.staged_changes_touching(change),
-        };
-        if !touching.is_empty() {
-            moved += 1;
-            changes.extend(touching);
-        }
-    }
+    let touching = |change: &Hunk| match direction {
+        Direction::Stage => diff.unstaged_changes_touching(change),
+        Direction::Unstage => diff.staged_changes_touching(change),
+    };
+    let changes = sorted_unique(selected.iter().flat_map(touching).collect());
     if changes.is_empty() {
         bail!("The selected changes are already {}", direction.adjective());
     }
-    let changes = sorted_unique(changes);
+    // One index-side change can span several displayed changes, so count every displayed
+    // change the patch moves rather than only the selected ones.
+    let moved = (0..diff.len())
+        .filter(|&n| {
+            touching(&diff.nth_hunk(n))
+                .iter()
+                .any(|c| changes.contains(c))
+        })
+        .count();
     match direction {
         Direction::Stage => {
             let patch = unified_patch(&file.relative, index, diff.doc(), &changes);
@@ -310,7 +318,12 @@ pub(super) fn commit(
                     Some('C'),
                     ui::completers::none,
                     move |cx: &mut compositor::Context, input: &str, event: PromptEvent| {
-                        if event != PromptEvent::Validate || input.trim().is_empty() {
+                        if event != PromptEvent::Validate {
+                            return;
+                        }
+                        if input.trim().is_empty() {
+                            cx.editor
+                                .set_error("Commit message is empty; nothing committed");
                             return;
                         }
                         run_commit(cx, root.clone(), input.to_string());

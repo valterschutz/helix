@@ -38,6 +38,8 @@ fn repo(index: &str, worktree: &str) -> (TempDir, PathBuf) {
     git(root, &["config", "user.email", "test@helix.org"]);
     git(root, &["config", "user.name", "helix-test"]);
     git(root, &["config", "commit.gpgsign", "false"]);
+    // A global core.hooksPath would otherwise bypass the repository's own hooks.
+    git(root, &["config", "core.hooksPath", ".git/hooks"]);
     let file = root.join("file.txt");
     std::fs::write(&file, "a\nb\nc\n").unwrap();
     git(root, &["add", "file.txt"]);
@@ -219,6 +221,97 @@ async fn commit_refuses_an_empty_index() -> anyhow::Result<()> {
             let status = status_text(app);
             assert!(status.contains("Nothing staged"), "status: {status}");
         })],
+    )
+    .await?;
+    assert_eq!(git(dir.path(), &["log", "--format=%s"]), "initial\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stage_diff_change_completes_a_partly_staged_change() -> anyhow::Result<()> {
+    // `b -> B` is staged, then edited again to `X`: one partly staged change.
+    let (dir, file) = repo("a\nB\nc\n", "a\nX\nc\n");
+    run(
+        &file,
+        1,
+        vec![(":stage-diff-change<ret>", &|app| {
+            assert_eq!(status_text(app), "Staged 1 change");
+            assert_eq!(
+                first_change_staging_state(app),
+                Some(helix_vcs::StagingState::Staged)
+            );
+        })],
+    )
+    .await?;
+    assert_eq!(index_content(dir.path()), "a\nX\nc\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unstage_diff_change_empties_a_partly_staged_change() -> anyhow::Result<()> {
+    let (dir, file) = repo("a\nB\nc\n", "a\nX\nc\n");
+    run(
+        &file,
+        1,
+        vec![(":unstage-diff-change<ret>", &|app| {
+            assert_eq!(status_text(app), "Unstaged 1 change");
+            assert_eq!(
+                first_change_staging_state(app),
+                Some(helix_vcs::StagingState::Unstaged)
+            );
+        })],
+    )
+    .await?;
+    assert_eq!(index_content(dir.path()), "a\nb\nc\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stage_diff_change_stages_every_change_a_selection_touches() -> anyhow::Result<()> {
+    // Two separate changes; selecting the whole file stages both.
+    let (dir, file) = repo("a\nb\nc\n", "A\nb\nC\n");
+    run(
+        &file,
+        0,
+        vec![("%:stage-diff-change<ret>", &|app| {
+            assert_eq!(status_text(app), "Staged 2 changes");
+        })],
+    )
+    .await?;
+    assert_eq!(index_content(dir.path()), "A\nb\nC\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn commit_offers_the_message_again_after_a_failed_commit() -> anyhow::Result<()> {
+    let (dir, file) = repo("a\nB\nc\n", "a\nB\nc\n");
+    let hook = dir.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    run(
+        &file,
+        0,
+        vec![
+            (":commit<ret>", &|_| {}),
+            ("Rejected by hook<ret>", &|app| {
+                let status = status_text(app);
+                assert!(status.starts_with("Commit failed"), "status: {status}");
+                assert_eq!(
+                    app.editor.pending_commit_message.as_deref(),
+                    Some("Rejected by hook")
+                );
+            }),
+            // The next prompt starts with the failed message; Enter alone resends it.
+            (":commit<ret>", &|_| {}),
+            ("<ret>", &|app| {
+                let status = status_text(app);
+                assert!(status.starts_with("Commit failed"), "status: {status}");
+            }),
+        ],
     )
     .await?;
     assert_eq!(git(dir.path(), &["log", "--format=%s"]), "initial\n");

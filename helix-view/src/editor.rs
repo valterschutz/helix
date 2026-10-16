@@ -2170,13 +2170,14 @@ impl Editor {
     pub fn refresh_vcs(&mut self, repo_root: &Path) {
         let providers = self.diff_providers.clone();
         for doc in self.documents.values_mut() {
-            let Some(path) = doc
-                .path()
-                .filter(|p| p.starts_with(repo_root))
-                .map(Path::to_path_buf)
-            else {
+            let Some(path) = doc.path().map(Path::to_path_buf) else {
                 continue;
             };
+            // `repo_root` comes from Git with symlinks resolved; compare like for like.
+            let resolved = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !resolved.starts_with(repo_root) {
+                continue;
+            }
             let trust_full = self
                 .workspace_trust
                 .query(doc.workspace_root(), TrustQuery::Git)
