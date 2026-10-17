@@ -5,7 +5,7 @@ pub mod jsonrpc;
 mod transport;
 
 use arc_swap::ArcSwap;
-pub use client::Client;
+pub use client::{Client, ExternalDocs};
 pub use futures_executor::block_on;
 pub use helix_lsp_types as lsp;
 pub use jsonrpc::Call;

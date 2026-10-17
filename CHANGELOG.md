@@ -5,6 +5,29 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
 ## 2026-10-17
 
+- Add `open_documentation` for semantic Rust documentation in the default
+  browser. Personal config binds it to `Space K`; `Space k` and its hover
+  popup are unchanged. Upstream has no command/config route to rust-analyzer's
+  `experimental/externalDocs` request, so a shell word search cannot open the
+  exact item reliably. Advertise `localDocs` to rust-analyzer and prefer an
+  existing local HTML file (including method anchors), otherwise use its web
+  URL only for a definition outside the Cargo workspace. RA guesses docs.rs
+  URLs even for unpublished workspace crates: check definition provenance
+  against `cargo metadata --no-deps --offline --locked` before web fallback.
+  This bounded metadata query never builds docs, accesses the network or
+  updates the lockfile; unavailable metadata/unknown provenance fails closed.
+  Local docs do not need the metadata query. Generate them manually with
+  `cargo doc --no-deps` (or `--document-private-items` for private items).
+  Stale docs/anchors are not rebuilt or validated; web availability is not
+  probed. No changes to hover, language-server selection for other features,
+  default keymaps, themes, or document-link navigation. Regression coverage:
+  `HELIX_TEST_EXECUTABLE=/path/to/hx python3 contrib/test-external-docs.py`
+  exercises the real editor with a deterministic LSP/opener fixture, including
+  UTF-16 positions, local anchors, dependency fallback, workspace suppression,
+  legacy/null/error responses and unchanged hover. Also verified the installed
+  rust-analyzer's std/dependency/workspace/variable responses against a small
+  Cargo project with manually generated docs (with Rust sources available).
+
 - `o` opens an indented line without continuing a comment, so opening space
   below a comment does not require deleting an unwanted prefix. Upstream's
   `continue-comments` setting controls both opening lines and insert-mode

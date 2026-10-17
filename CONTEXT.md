@@ -2,6 +2,20 @@
 
 Personal features carried by this fork of Helix.
 
+## Rust Documentation
+
+### Language
+
+**Local documentation**:
+Rust documentation already generated on this device, including documentation
+for workspace items or dependencies. It is not the editor's hover popup.
+_Avoid_: Inline docs
+
+**Web documentation**:
+Published Rust documentation for an item, typically on doc.rust-lang.org or
+docs.rs. An unpublished workspace item has no assumed web documentation.
+_Avoid_: Documentation search
+
 ## Inline AI Editing
 
 Helix can ask pi to transform a selected snippet and review the proposed replacement without leaving the editor.
