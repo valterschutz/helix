@@ -237,12 +237,19 @@ impl EditorView {
                     if width <= inner.width as usize {
                         // Keep the whole label on its target row at the right edge.
                         let col = pos.col.min(inner.width as usize - width);
-                        surface.set_string(
-                            inner.x + col as u16,
-                            inner.y + pos.row as u16,
-                            &label.text,
-                            label_style,
-                        );
+                        let label_x = inner.x + col as u16;
+                        let y = inner.y + pos.row as u16;
+                        // A shifted label can start inside a wide grapheme. Clear
+                        // its leading cell or the terminal diff skips our first letter.
+                        let mut x = inner.x;
+                        while x < label_x {
+                            let next = x + surface[(x, y)].width().max(1) as u16;
+                            if next > label_x {
+                                surface[(x, y)].set_symbol(" ");
+                            }
+                            x = next;
+                        }
+                        surface.set_string(label_x, y, &label.text, label_style);
                     }
                 }
             }

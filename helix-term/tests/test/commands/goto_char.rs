@@ -272,6 +272,51 @@ async fn shared_label_renderer_preserves_word_jumps() -> anyhow::Result<()> {
     test_goto_char(("#[.|]# one two\n", "vgwaa", "#[. one|]# two\n")).await
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn right_edge_labels_paint_over_a_wide_graphemes_trailing_cell() -> anyhow::Result<()> {
+    fn render(app: &Application) -> tui::buffer::Buffer {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        let mut surface = tui::buffer::Buffer::empty(app.editor.tree.area());
+        helix_term::ui::EditorView::new(Default::default()).render_view(
+            &app.editor,
+            doc,
+            view,
+            app.editor.tree.area(),
+            &mut surface,
+            true,
+        );
+        surface
+    }
+    let app = AppBuilder::new().with_config(config()).build()?;
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let width = usize::from(view.inner_width(doc));
+    drop(app);
+    let mut app = AppBuilder::new()
+        .with_config(config())
+        .with_input_text(format!(
+            "#[.|]#{}界\n{}",
+            " ".repeat(width - 4),
+            "x\n".repeat(29)
+        ))
+        .build()?;
+    let before = render(&app);
+    let assert_label_updates = |app: &Application| {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        let inner = view.inner_area(doc);
+        let after = render(app);
+        let updates = before.diff(&after);
+        for col in [inner.right() - 2, inner.right() - 1] {
+            assert!(
+                updates
+                    .iter()
+                    .any(|(x, y, cell)| *x == col && *y == inner.y && cell.symbol.as_str() == "a"),
+                "terminal update missing for label at column {col}"
+            );
+        }
+    };
+    test_key_sequence(&mut app, Some("_<ret>"), Some(&assert_label_updates), false).await
+}
+
 async fn test_goto_char<T: Into<TestCase>>(test_case: T) -> anyhow::Result<()> {
     test_with_config(AppBuilder::new().with_config(config()), test_case).await
 }

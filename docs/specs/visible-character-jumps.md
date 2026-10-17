@@ -22,7 +22,7 @@ labels. Compare all fields of the viewport, not just its document anchor.
 
 Validation on the implementation checkout:
 
-- All 258 command integration tests pass (21 character/word-jump tests).
+- All 259 command integration tests pass (22 character/word-jump tests).
 - The workspace test/doc-test run has 10 unit-test failures caused by missing
   Tokio runtime contexts in `helix-event` and `helix-view`. A detached checkout
   of the unchanged `cb88ca470` baseline reproduces the exact same 10 failures.
@@ -30,6 +30,11 @@ Validation on the implementation checkout:
 - The original label-time viewport regression was observed failing before the
   fix (anchor `116` became `106`) and passing afterwards. Hidden wrapped
   targets and scroll-margin activation were also observed red before fixes.
+- Spec review caught a right-edge label starting inside a wide grapheme. A
+  terminal-buffer diff test reproduced the missing first letter before the
+  fix and passes after clearing the straddling grapheme's leading cell.
+- Standards review found no hard breaches, only optional duplicated fixture
+  setup in two scroll-margin tests; the explicit independent fixtures are kept.
 
 Review baseline agreed with the user: `4e0964582`. Implementation starts from
 `cb88ca470` (the subsequently fetched fork master, already pinned by Home Manager).
