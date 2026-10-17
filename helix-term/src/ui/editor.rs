@@ -162,8 +162,7 @@ impl EditorView {
             }
         }
 
-        // Grapheme overlays (jump labels) go last so their style patches over
-        // the selection, cursor and diagnostics instead of being hidden by them.
+        // Grapheme overlay styles patch over selection and diagnostics.
         overlays.push(Self::overlay_syntax_highlights(
             doc,
             view_offset.anchor,
@@ -223,6 +222,31 @@ impl EditorView {
             theme,
             decorations,
         );
+
+        // Jump labels are screen decorations, not text replacements: replacing
+        // a newline, tab or wide grapheme would change wrapping and scroll the view.
+        let labels = doc.jump_labels(view.id);
+        if !labels.is_empty() {
+            let positions = view.visible_text_positions(doc);
+            let label_style = theme.get("ui.virtual.jump-label");
+            for label in labels {
+                if let Ok(index) = positions.binary_search_by_key(&label.char_idx, |&(idx, _)| idx)
+                {
+                    let pos = positions[index].1;
+                    let width = label.text.width();
+                    if width <= inner.width as usize {
+                        // Keep the whole label on its target row at the right edge.
+                        let col = pos.col.min(inner.width as usize - width);
+                        surface.set_string(
+                            inner.x + col as u16,
+                            inner.y + pos.row as u16,
+                            &label.text,
+                            label_style,
+                        );
+                    }
+                }
+            }
+        }
 
         // if we're not at the edge of the screen, draw a right border
         if viewport.right() != view.area.right() {
@@ -1466,6 +1490,7 @@ impl Component for EditorView {
             register: None,
             callback: Vec::new(),
             on_next_key_callback: None,
+            keep_viewport: false,
             jobs: context.jobs,
         };
 
@@ -1578,7 +1603,9 @@ impl Component for EditorView {
                 let mode = cx.editor.mode();
                 let (view, doc) = current!(cx.editor);
 
-                view.ensure_cursor_in_view(doc, config.scrolloff);
+                if !cx.keep_viewport {
+                    view.ensure_cursor_in_view(doc, config.scrolloff);
+                }
 
                 // Store a history state if not in insert mode. This also takes care of
                 // committing changes when leaving insert mode.

@@ -43,7 +43,7 @@ The character the user types to choose which visible positions become jump targe
 _Avoid_: Query, pattern
 
 **Jump target**:
-A visible position the user can jump to.
+A fully visible character position the user can jump to. A partially visible character is not a jump target.
 _Avoid_: Candidate, match, hint
 
 **Jump label**:

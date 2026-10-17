@@ -39,14 +39,14 @@ use helix_core::{
     search::{self},
     selection, surround,
     syntax::config::{BlockCommentToken, LanguageServerFeature},
-    text_annotations::{Overlay, TextAnnotations},
+    text_annotations::TextAnnotations,
     textobject,
     unicode::width::UnicodeWidthChar,
     visual_offset_from_block, Deletion, LineEnding, Position, Range, Rope, RopeReader, RopeSlice,
     Selection, SmallVec, Syntax, Tendril, Transaction,
 };
 use helix_view::{
-    document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
+    document::{FormatterError, JumpLabel, Mode, SCRATCH_BUFFER_NAME},
     editor::{Action, Motion},
     expansion,
     info::Info,
@@ -109,6 +109,8 @@ pub struct Context<'a> {
 
     pub callback: Vec<crate::compositor::Callback>,
     pub on_next_key_callback: Option<(OnKeyCallback, OnKeyCallbackKind)>,
+    /// Leave the viewport untouched for this key while choosing a jump target.
+    pub(crate) keep_viewport: bool,
     pub jobs: &'a mut Jobs,
 }
 
@@ -3775,6 +3777,7 @@ pub fn command_palette(cx: &mut Context) {
                     editor: cx.editor,
                     callback: Vec::new(),
                     on_next_key_callback: None,
+                    keep_viewport: false,
                     jobs: cx.jobs,
                 };
                 let focus = view!(ctx.editor).id;
@@ -3787,7 +3790,9 @@ pub fn command_palette(cx: &mut Context) {
                     let view = view_mut!(ctx.editor, focus);
                     let doc = doc_mut!(ctx.editor, &view.doc);
 
-                    view.ensure_cursor_in_view(doc, config.scrolloff);
+                    if !ctx.keep_viewport {
+                        view.ensure_cursor_in_view(doc, config.scrolloff);
+                    }
 
                     if mode != Mode::Insert {
                         doc.append_changes_to_history(view);
@@ -7502,6 +7507,7 @@ impl JumpTargets {
         let Some(mut range) = self.ranges.get(index).copied() else {
             return;
         };
+        cx.keep_viewport = false;
         range = if self.behaviour == Movement::Extend {
             let anchor = if range.anchor < range.head {
                 let from = self.primary_selection.from();
@@ -7543,42 +7549,31 @@ fn jump_to_label_of_len(
     behaviour: Movement,
     label_len: usize,
 ) {
+    cx.keep_viewport = true;
     debug_assert!(label_len == 1 || label_len == 2);
-    let doc = doc!(cx.editor);
     let alphabet = &cx.editor.config().jump_label_alphabet;
     if labels.is_empty() {
         return;
     }
-    let alphabet_char = |i| {
-        let mut res = Tendril::new();
-        res.push(alphabet[i]);
-        res
-    };
-
-    // Add label for each jump candidate to the View as virtual text.
-    let text = doc.text().slice(..);
-    let mut overlays: Vec<_> = labels
+    let mut jump_labels: Vec<_> = labels
         .iter()
         .enumerate()
-        .flat_map(|(i, range)| {
-            let first = range.from();
-            if label_len == 1 {
-                vec![Overlay::new(first, alphabet_char(i))]
-            } else {
-                vec![
-                    Overlay::new(first, alphabet_char(i / alphabet.len())),
-                    Overlay::new(
-                        graphemes::next_grapheme_boundary(text, first),
-                        alphabet_char(i % alphabet.len()),
-                    ),
-                ]
+        .map(|(i, range)| {
+            let mut text = Tendril::new();
+            if label_len == 2 {
+                text.push(alphabet[i / alphabet.len()]);
+            }
+            text.push(alphabet[i % alphabet.len()]);
+            JumpLabel {
+                char_idx: range.from(),
+                text,
             }
         })
         .collect();
-    overlays.sort_unstable_by_key(|overlay| overlay.char_idx);
+    jump_labels.sort_unstable_by_key(|label| label.char_idx);
     let targets = JumpTargets::new(cx, labels, behaviour);
     let (view, doc) = current!(cx.editor);
-    doc.set_jump_labels(view.id, overlays);
+    doc.set_jump_labels(view.id, jump_labels);
 
     read_jump_label(cx, targets, 0, label_len);
 }
@@ -7587,6 +7582,7 @@ fn jump_to_label_of_len(
 /// index encoded by the characters read so far. Any other key cancels.
 fn read_jump_label(cx: &mut Context, targets: JumpTargets, prefix: usize, remaining: usize) {
     cx.on_next_key(move |cx, event| {
+        cx.keep_viewport = true;
         let alphabet = &cx.editor.config().jump_label_alphabet;
         let Some(i) = event
             .char()
@@ -7720,7 +7716,9 @@ fn extend_to_char(cx: &mut Context) {
 /// Read a search character, label every visible occurrence of it and jump
 /// to the one whose label is typed.
 fn jump_to_char(cx: &mut Context, behaviour: Movement) {
+    cx.keep_viewport = true;
     cx.on_next_key(move |cx, event| {
+        cx.keep_viewport = true;
         let modifiers = event.modifiers.difference(KeyModifiers::SHIFT);
         let search = match event.code {
             _ if !modifiers.is_empty() => return,
@@ -7746,27 +7744,21 @@ fn jump_to_char(cx: &mut Context, behaviour: Movement) {
         let (view, doc) = current_ref!(cx.editor);
         let text = doc.text().slice(..);
 
-        // This is not necessarily exact if there is virtual text like soft wrap.
-        // It's ok though because the extra jump labels will not be rendered.
-        let start = text.line_to_char(text.char_to_line(doc.view_offset(view.id).anchor));
-        let end = text.line_to_char(view.estimate_last_doc_line(doc) + 1);
         let cursor = doc.selection(view.id).primary().cursor(text);
 
         // Targets after the cursor as forward ranges in document order and
         // targets before it as backward ranges in reverse document order.
         let mut forward = Vec::new();
         let mut backward = Vec::new();
-        let mut pos = start;
-        for grapheme in text.slice(start..end).graphemes() {
-            let next = pos + grapheme.len_chars();
-            if pos != cursor && grapheme.chars().next().is_some_and(matches) {
+        for (pos, _) in view.visible_text_positions(doc) {
+            let next = next_grapheme_boundary(text, pos);
+            if pos != cursor && text.get_char(pos).is_some_and(matches) {
                 if pos > cursor {
                     forward.push(Range::new(pos, next));
                 } else {
                     backward.push(Range::new(next, pos));
                 }
             }
-            pos = next;
         }
         backward.reverse();
 

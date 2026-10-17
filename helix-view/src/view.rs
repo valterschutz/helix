@@ -10,7 +10,7 @@ use crate::{
 
 use helix_core::{
     char_idx_at_visual_offset,
-    doc_formatter::TextFormat,
+    doc_formatter::{DocumentFormatter, TextFormat},
     text_annotations::TextAnnotations,
     visual_offset_from_anchor, visual_offset_from_block, Position, RopeSlice, Selection,
     Transaction,
@@ -454,6 +454,42 @@ impl View {
         Some(pos)
     }
 
+    /// Document grapheme starts fully visible in the viewport, paired with
+    /// viewport-relative screen coordinates. Virtual text is not a jump target.
+    pub fn visible_text_positions(&self, doc: &Document) -> Vec<(usize, Position)> {
+        let text = doc.text().slice(..);
+        let offset = doc.view_offset(self.id);
+        let viewport = self.inner_area(doc);
+        let format = doc.text_format(viewport.width, None);
+        let annotations = self.text_annotations(doc, None);
+        let row_off =
+            visual_offset_from_block(text, offset.anchor, offset.anchor, &format, &annotations)
+                .0
+                .row
+                + offset.vertical_offset;
+        let formatter =
+            DocumentFormatter::new_at_prev_checkpoint(text, &format, &annotations, offset.anchor);
+        let mut positions = Vec::new();
+        for grapheme in formatter {
+            let pos = grapheme.visual_pos;
+            if pos.row >= row_off + viewport.height as usize {
+                break;
+            }
+            if grapheme.is_virtual()
+                || pos.row < row_off
+                || pos.col < offset.horizontal_offset
+                || pos.col + grapheme.width() > offset.horizontal_offset + viewport.width as usize
+            {
+                continue;
+            }
+            positions.push((
+                grapheme.char_idx,
+                Position::new(pos.row - row_off, pos.col - offset.horizontal_offset),
+            ));
+        }
+        positions
+    }
+
     /// Get the text annotations to display in the current view for the given document and theme.
     pub fn text_annotations<'a>(
         &self,
@@ -461,11 +497,6 @@ impl View {
         theme: Option<&Theme>,
     ) -> TextAnnotations<'a> {
         let mut text_annotations = TextAnnotations::default();
-
-        if let Some(labels) = doc.jump_labels.get(&self.id) {
-            let style = theme.and_then(|t| t.find_highlight("ui.virtual.jump-label"));
-            text_annotations.add_overlay(labels, style);
-        }
 
         if let Some(DocumentInlayHints {
             id: _,

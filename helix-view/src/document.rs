@@ -11,7 +11,7 @@ use helix_core::doc_formatter::TextFormat;
 use helix_core::encoding::Encoding;
 use helix_core::snippets::{ActiveSnippet, SnippetRenderCtx};
 use helix_core::syntax::config::LanguageServerFeature;
-use helix_core::text_annotations::{InlineAnnotation, Overlay};
+use helix_core::text_annotations::InlineAnnotation;
 use helix_event::TaskController;
 use helix_lsp::util::lsp_pos_to_pos;
 use helix_stdx::faccess::{copy_metadata, readonly};
@@ -40,7 +40,8 @@ use helix_core::{
     indent::{auto_detect_indent_style, IndentStyle},
     line_ending::auto_detect_line_ending,
     syntax::{self, config::LanguageConfiguration},
-    ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Transaction,
+    ChangeSet, Diagnostic, LineEnding, Range, Rope, RopeBuilder, Selection, Syntax, Tendril,
+    Transaction,
 };
 
 use crate::{
@@ -138,6 +139,13 @@ pub enum DocumentOpenError {
     IoError(#[from] io::Error),
 }
 
+/// A screen label at a document grapheme, drawn without changing text layout.
+#[derive(Debug, Clone)]
+pub struct JumpLabel {
+    pub char_idx: usize,
+    pub text: Tendril,
+}
+
 pub struct Document {
     pub(crate) id: DocumentId,
     text: Rope,
@@ -150,7 +158,7 @@ pub struct Document {
     /// To know if they're up-to-date, check the `id` field in `DocumentInlayHints`.
     pub(crate) inlay_hints: HashMap<ViewId, DocumentInlayHints>,
     /// Jump label overlays for each view.
-    pub(crate) jump_labels: HashMap<ViewId, Vec<Overlay>>,
+    jump_labels: HashMap<ViewId, Vec<JumpLabel>>,
     /// LSP document highlights for each view, stored as char ranges.
     pub(crate) document_highlights: HashMap<ViewId, DocumentHighlights>,
     /// LSP code action hints for each view.
@@ -2432,8 +2440,12 @@ impl Document {
         self.inlay_hints.insert(view_id, inlay_hints);
     }
 
-    pub fn set_jump_labels(&mut self, view_id: ViewId, labels: Vec<Overlay>) {
+    pub fn set_jump_labels(&mut self, view_id: ViewId, labels: Vec<JumpLabel>) {
         self.jump_labels.insert(view_id, labels);
+    }
+
+    pub fn jump_labels(&self, view_id: ViewId) -> &[JumpLabel] {
+        self.jump_labels.get(&view_id).map_or(&[], Vec::as_slice)
     }
 
     pub fn remove_jump_labels(&mut self, view_id: ViewId) {

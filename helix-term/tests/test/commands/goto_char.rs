@@ -5,7 +5,7 @@ use helix_view::document::Mode;
 use super::*;
 
 fn config() -> Config {
-    let mut config = Config::default();
+    let mut config = helpers::test_config();
     config.keys.insert(
         Mode::Normal,
         keymap!({"Normal Mode"
@@ -19,6 +19,257 @@ fn config() -> Config {
         }),
     );
     config
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn labels_do_not_scroll_a_wrapped_viewport() -> anyhow::Result<()> {
+    let mut config = config();
+    config.editor.soft_wrap.enable = Some(true);
+    config.editor.soft_wrap.wrap_at_text_width = Some(true);
+    config.editor.text_width = 80;
+    let input = format!("{}#[.|]#\n{}", "x\n".repeat(200), "x\n".repeat(200));
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_input_text(input)
+        .build()?;
+    let view_id = app.editor.tree.focus;
+    app.editor.ensure_cursor_in_view(view_id);
+    run_event_loop_until_idle(&mut app).await;
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let viewport = doc.view_offset(view.id);
+    let assert_viewport = |app: &Application| {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        assert_eq!(doc.view_offset(view.id), viewport);
+    };
+    test_key_sequences(
+        &mut app,
+        vec![
+            (Some("_"), Some(&assert_viewport)),
+            (Some("x"), Some(&assert_viewport)),
+            (Some("a"), Some(&assert_viewport)),
+            (Some("<esc>"), Some(&assert_viewport)),
+        ],
+        false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offscreen_wrapped_characters_are_not_jump_targets() -> anyhow::Result<()> {
+    let mut config = config();
+    config.editor.soft_wrap.enable = Some(true);
+    config.editor.soft_wrap.wrap_at_text_width = Some(true);
+    config.editor.text_width = 80;
+    let input = format!("#[.|]#{}z\n", "x ".repeat(8000));
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_input_text(input)
+        .build()?;
+    let assert_cursor = |app: &Application| {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        assert_eq!(
+            doc.selection(view.id)
+                .primary()
+                .cursor(doc.text().slice(..)),
+            0
+        );
+    };
+    test_key_sequence(&mut app, Some("_z"), Some(&assert_cursor), false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn choosing_or_cancelling_a_target_preserves_a_scroll_margin() -> anyhow::Result<()> {
+    for mode in [Mode::Normal, Mode::Select] {
+        let mut app = AppBuilder::new()
+            .with_config(config())
+            .with_input_text(format!(
+                "{}#[.|]#\n{}",
+                "x\n".repeat(200),
+                "x\n".repeat(200)
+            ))
+            .build()?;
+        app.editor.mode = mode;
+        let (view, doc) = helix_view::current!(app.editor);
+        let viewport = helix_view::view::ViewPosition {
+            anchor: 400,
+            ..Default::default()
+        };
+        doc.set_view_offset(view.id, viewport);
+        let assert_viewport = |app: &Application| {
+            let (view, doc) = helix_view::current_ref!(app.editor);
+            assert_eq!(doc.view_offset(view.id), viewport);
+            assert_eq!(
+                doc.selection(view.id)
+                    .primary()
+                    .cursor(doc.text().slice(..)),
+                400
+            );
+        };
+        test_key_sequences(
+            &mut app,
+            vec![
+                (Some("_"), Some(&assert_viewport)),
+                (Some("x"), Some(&assert_viewport)),
+                (Some("a"), Some(&assert_viewport)),
+                (Some("<esc>"), Some(&assert_viewport)),
+                (Some("_z"), Some(&assert_viewport)),
+                (Some("_<esc>"), Some(&assert_viewport)),
+            ],
+            false,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_key_jump_labels_at_line_ends_stay_on_the_target_row() -> anyhow::Result<()> {
+    let mut app = AppBuilder::new()
+        .with_config(config())
+        .with_input_text(format!("#[.|]#\n{}", "x\n".repeat(29)))
+        .build()?;
+    let assert_label = |app: &Application| {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        let inner = view.inner_area(doc);
+        let mut surface = tui::buffer::Buffer::empty(app.editor.tree.area());
+        helix_term::ui::EditorView::new(Default::default()).render_view(
+            &app.editor,
+            doc,
+            view,
+            app.editor.tree.area(),
+            &mut surface,
+            true,
+        );
+        assert_eq!(surface[(inner.x + 1, inner.y)].symbol.as_str(), "a");
+        assert_eq!(surface[(inner.x + 2, inner.y)].symbol.as_str(), "a");
+    };
+    test_key_sequence(&mut app, Some("_<ret>"), Some(&assert_label), false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn horizontally_clipped_characters_are_not_jump_targets() -> anyhow::Result<()> {
+    for (input, horizontal_offset, cursor) in [
+        (format!("#[.|]#{}z\n", "x".repeat(200)), 0, 0),
+        (format!("z{}#[.|]#\n", "x".repeat(200)), 150, 201),
+        (format!("界{}#[.|]#\n", "x".repeat(200)), 1, 201),
+    ] {
+        let mut app = AppBuilder::new()
+            .with_config(config())
+            .with_input_text(input.clone())
+            .build()?;
+        let (view, doc) = helix_view::current!(app.editor);
+        let mut viewport = doc.view_offset(view.id);
+        viewport.horizontal_offset = horizontal_offset;
+        doc.set_view_offset(view.id, viewport);
+        let assert_cursor = |app: &Application| {
+            let (view, doc) = helix_view::current_ref!(app.editor);
+            assert_eq!(
+                doc.selection(view.id)
+                    .primary()
+                    .cursor(doc.text().slice(..)),
+                cursor
+            );
+            assert_eq!(doc.view_offset(view.id), viewport);
+        };
+        let keys = if input.starts_with('界') {
+            "_界"
+        } else {
+            "_z"
+        };
+        test_key_sequence(&mut app, Some(keys), Some(&assert_cursor), false).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn partially_visible_wide_characters_are_not_jump_targets() -> anyhow::Result<()> {
+    let app = AppBuilder::new().with_config(config()).build()?;
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let width = view.inner_width(doc);
+    drop(app);
+    let mut app = AppBuilder::new()
+        .with_config(config())
+        .with_input_text(format!("#[.|]#{}界\n", " ".repeat(usize::from(width) - 2)))
+        .build()?;
+    let assert_cursor = |app: &Application| {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        assert_eq!(
+            doc.selection(view.id)
+                .primary()
+                .cursor(doc.text().slice(..)),
+            0
+        );
+    };
+    test_key_sequence(&mut app, Some("_界"), Some(&assert_cursor), false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wrapped_continuations_above_the_viewport_are_not_jump_targets() -> anyhow::Result<()> {
+    let mut config = config();
+    config.editor.soft_wrap.enable = Some(true);
+    config.editor.soft_wrap.wrap_at_text_width = Some(true);
+    config.editor.text_width = 80;
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_input_text(format!("z{}#[.|]#\n", "x ".repeat(8000)))
+        .build()?;
+    app.editor.ensure_cursor_in_view(app.editor.tree.focus);
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let viewport = doc.view_offset(view.id);
+    assert!(viewport.anchor > 0);
+    let assert_cursor = |app: &Application| {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        assert_eq!(
+            doc.selection(view.id)
+                .primary()
+                .cursor(doc.text().slice(..)),
+            16001
+        );
+        assert_eq!(doc.view_offset(view.id), viewport);
+    };
+    test_key_sequence(&mut app, Some("_z"), Some(&assert_cursor), false).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completing_a_jump_still_scrolls_to_satisfy_the_scroll_margin() -> anyhow::Result<()> {
+    for mode in [Mode::Normal, Mode::Select] {
+        let mut app = AppBuilder::new()
+            .with_config(config())
+            .with_input_text(format!(
+                "{}#[.|]#\n{}",
+                "x\n".repeat(200),
+                "x\n".repeat(200)
+            ))
+            .build()?;
+        app.editor.mode = mode;
+        let (view, doc) = helix_view::current!(app.editor);
+        let viewport = helix_view::view::ViewPosition {
+            anchor: 400,
+            ..Default::default()
+        };
+        doc.set_view_offset(view.id, viewport);
+        let assert_jump = |app: &Application| {
+            let (view, doc) = helix_view::current_ref!(app.editor);
+            assert_eq!(
+                doc.selection(view.id)
+                    .primary()
+                    .cursor(doc.text().slice(..)),
+                402
+            );
+            assert_ne!(doc.view_offset(view.id), viewport);
+            if mode == Mode::Select {
+                assert_eq!(doc.selection(view.id).primary().from(), 400);
+            }
+        };
+        test_key_sequence(&mut app, Some("_xaa"), Some(&assert_jump), false).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_label_renderer_preserves_word_jumps() -> anyhow::Result<()> {
+    test_goto_char(("#[.|]# one two\n", "gwaa", ". #[one|]# two\n")).await?;
+    test_goto_char(("#[.|]# one two\n", "vgwaa", "#[. one|]# two\n")).await
 }
 
 async fn test_goto_char<T: Into<TestCase>>(test_case: T) -> anyhow::Result<()> {

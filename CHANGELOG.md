@@ -3,6 +3,22 @@
 Permanent fork; these changes are not meant for upstream. Upstream's work is
 brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
+## 2026-10-17
+
+- Keep the viewport fixed while choosing a `goto_char` / `extend_to_char`
+  target, including label prefixes, no matches and cancellation. Completing
+  a jump still uses normal cursor scrolling and scroll margins. Target only
+  fully visible document characters, not offscreen wrapped continuations or
+  horizontally clipped graphemes. The old estimated document-line bounds
+  included hidden positions, and replacing graphemes with labels could erase
+  line endings or alter tab/wide-character widths, causing dramatic scrolling.
+  Configuration cannot fix those command/renderer behaviours. Labels now draw
+  over the formatted screen without participating in text layout; the shared
+  word-jump renderer gains the same stable layout while word-target ordering
+  and selections are unchanged. Two-key labels stay on their target row and
+  shift left at the right edge to remain readable; nearby labels can still
+  overlap. Existing `ui.virtual.jump-label` theme configuration is retained.
+
 ## 2026-10-16
 
 - Stage, unstage, discard and commit changes from the editor, mirroring the
