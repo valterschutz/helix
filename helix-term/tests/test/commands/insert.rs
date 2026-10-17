@@ -659,8 +659,7 @@ async fn test_open_below_with_multiple_cursors() -> anyhow::Result<()> {
     .await?;
 
     // the first line is within a comment, the second not.
-    // However, if we open below, the first newly added line should start within a comment
-    // while the other should be a normal line
+    // Opening below keeps indentation but neither new line continues a comment.
     test((
         indoc! {"fn main() {
                 // #[VIP|]# comment
@@ -669,15 +668,14 @@ async fn test_open_below_with_multiple_cursors() -> anyhow::Result<()> {
         ":lang rust<ret>o",
         indoc! {"fn main() {
                 // VIP comment
-                // #[\n|]#
+                #[\n|]#
                 let yes = false;
                 #(\n|)#
             }"},
     ))
     .await?;
 
-    // Open below should continue comment even if language has `comment` grammar
-    // injection.
+    // Opening below also skips comment continuation with a `comment` grammar injection.
     test((
         indoc! {"\
             package main
@@ -690,7 +688,7 @@ async fn test_open_below_with_multiple_cursors() -> anyhow::Result<()> {
             package main
 
             // VIP comment
-            // #[\n|]#
+            #[\n|]#
             func main() {}
         "},
     ))

@@ -5,6 +5,15 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
 ## 2026-10-17
 
+- `o` opens an indented line without continuing a comment, so opening space
+  below a comment does not require deleting an unwanted prefix. Upstream's
+  `continue-comments` setting controls both opening lines and insert-mode
+  Enter; toggling it in a keybinding is deferred and cannot reliably separate
+  the actions. Disable continuation only in `open_below`: Enter and `O` keep
+  their existing configurable continuation, as do indentation, counts and
+  multiple cursors. This deliberately makes `o` and `O` asymmetric; no new
+  option is added for this personal default.
+
 - Enter between a pair (such as `{|}`) opens an indented line with the
   closing delimiter below even when `auto-pairs = false`. Upstream gates this
   on auto-pairs, so disabling auto-closing of typed delimiters also lost the

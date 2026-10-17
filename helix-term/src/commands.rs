@@ -4113,7 +4113,7 @@ fn open(cx: &mut Context, open: Open, comment_continuation: CommentContinuation)
 
 // o inserts a new line after each line with a selection
 fn open_below(cx: &mut Context) {
-    open(cx, Open::Below, CommentContinuation::Enabled)
+    open(cx, Open::Below, CommentContinuation::Disabled)
 }
 
 // O inserts a new line before each line with a selection
