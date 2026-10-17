@@ -71,6 +71,9 @@
             nativeBuildInputs = with pkgs;
               [
                 lld
+                # Portable cluster builds, e.g. Arrhenius (glibc 2.34).
+                cargo-zigbuild
+                zig
                 cargo-flamegraph
                 rust-bin.nightly.latest.rust-analyzer
                 mdbook
