@@ -874,3 +874,40 @@ async fn test_indent_with_spaces() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn insert_newline_between_pairs_with_auto_pairs_disabled() -> anyhow::Result<()> {
+    use helix_core::auto_pairs::DEFAULT_PAIRS;
+    use helix_core::syntax::config::AutoPairConfig;
+
+    let config = || Config {
+        editor: helix_view::editor::Config {
+            auto_pairs: AutoPairConfig::Enable(false),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // Typed pairs still open an indented line, even though nothing is auto-closed.
+    test_with_config(
+        AppBuilder::new()
+            .with_config(config())
+            .with_file("foo.rs", None),
+        ("Order #[|\n]#", "i{}<left><ret>", "Order {\n    #[\n|]#}\n"),
+    )
+    .await?;
+
+    for &(open, close) in DEFAULT_PAIRS {
+        test_with_config(
+            AppBuilder::new().with_config(config()),
+            (
+                format!("{open}#[{close}|]#"),
+                "i<ret>",
+                format!("{open}\n\t#[|\n]#{close}"),
+            ),
+        )
+        .await?;
+    }
+
+    Ok(())
+}

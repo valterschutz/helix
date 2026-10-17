@@ -4815,11 +4815,14 @@ pub mod insert {
                 let loader: &helix_core::syntax::Loader = &cx.editor.syn_loader.load();
                 // If we are between pairs (such as brackets), we want to
                 // insert an additional line which is indented one level
-                // more and place the cursor there
-                let on_auto_pair = doc
-                    .auto_pairs(cx.editor, loader, view)
-                    .and_then(|pairs| pairs.get(prev))
-                    .is_some_and(|pair| pair.open == prev && pair.close == curr);
+                // more and place the cursor there. Unlike upstream, this also
+                // applies with auto-pairs disabled, using the default pairs.
+                let on_auto_pair = match doc.auto_pairs(cx.editor, loader, view) {
+                    Some(pairs) => pairs
+                        .get(prev)
+                        .is_some_and(|pair| pair.open == prev && pair.close == curr),
+                    None => auto_pairs::DEFAULT_PAIRS.contains(&(prev, curr)),
+                };
 
                 let local_offs = if let Some(token) = continue_comment_token {
                     new_text.reserve_exact(line_ending.len() + indent.len() + token.len() + 1);

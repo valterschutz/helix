@@ -5,6 +5,12 @@ brought in by merging `upstream/master`. Upstream's own changelog follows below.
 
 ## 2026-10-17
 
+- Enter between a pair (such as `{|}`) opens an indented line with the
+  closing delimiter below even when `auto-pairs = false`. Upstream gates this
+  on auto-pairs, so disabling auto-closing of typed delimiters also lost the
+  block indentation; no configuration separates the two. With auto-pairs
+  disabled, the default pairs (`()`, `[]`, `{}`, quotes, backticks) are
+  recognised; typed delimiters are still never auto-closed or auto-deleted.
 - Keep the viewport fixed while choosing a `goto_char` / `extend_to_char`
   target, including label prefixes, no matches and cancellation. Completing
   a jump still uses normal cursor scrolling and scroll margins. Target only
