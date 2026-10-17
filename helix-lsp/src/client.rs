@@ -52,6 +52,25 @@ fn workspace_for_uri(uri: lsp::Url) -> WorkspaceFolder {
     }
 }
 
+/// rust-analyzer's `experimental/externalDocs` response, including older servers.
+#[derive(Debug, serde::Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExternalDocs {
+    Web(Option<Url>),
+    WithLocal {
+        web: Option<Url>,
+        local: Option<Url>,
+    },
+}
+
+enum ExternalDocsRequest {}
+
+impl lsp::request::Request for ExternalDocsRequest {
+    type Params = lsp::TextDocumentPositionParams;
+    type Result = ExternalDocs;
+    const METHOD: &'static str = "experimental/externalDocs";
+}
+
 #[derive(Debug)]
 pub struct Client {
     id: LanguageServerId,
@@ -753,6 +772,10 @@ impl Client {
                     work_done_progress: Some(true),
                     show_document: Some(lsp::ShowDocumentClientCapabilities { support: true }),
                 }),
+                // Request both URL candidates, not only the web URL. This changes
+                // only externalDocs responses, not ordinary hover rendering.
+                experimental: (self.name == "rust-analyzer")
+                    .then(|| serde_json::json!({ "localDocs": true })),
                 general: Some(lsp::GeneralClientCapabilities {
                     position_encodings: Some(vec![
                         PositionEncodingKind::UTF8,
@@ -1308,6 +1331,18 @@ impl Client {
         }
 
         Some(self.call::<lsp::request::DocumentLinkResolve>(params))
+    }
+
+    /// Only call on rust-analyzer: this extension has no standard capability.
+    pub fn external_docs(
+        &self,
+        text_document: lsp::TextDocumentIdentifier,
+        position: lsp::Position,
+    ) -> impl Future<Output = Result<ExternalDocs>> {
+        self.call::<ExternalDocsRequest>(lsp::TextDocumentPositionParams {
+            text_document,
+            position,
+        })
     }
 
     pub fn text_document_hover(
